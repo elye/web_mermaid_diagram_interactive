@@ -19,7 +19,7 @@ describe('.mermaidflow round-trip', () => {
 
   it('serialises to a valid JSON object and restores identical state', () => {
     const file = buildFileObject();
-    expect(file.version).toBe('1.0');
+    expect(file.version).toBe('1.1');
     expect(file.mermaidSource).toContain('flowchart');
 
     // Clobber state, then restore.

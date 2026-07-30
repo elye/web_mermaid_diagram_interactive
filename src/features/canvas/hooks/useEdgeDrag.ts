@@ -37,6 +37,7 @@ import { useEffect } from 'react';
 import { useDiagramStore } from '@/stores/diagramStore';
 import { useStyleStore } from '@/stores/styleStore';
 import { useSelectionStore } from '@/stores/selectionStore';
+import { useHistoryStore } from '@/stores/historyStore';
 import { routeAllEdges, expandViewBoxToFit } from '../services/edgeRouter';
 import { pathMidpoint, groupBBox, groupPolygon } from '../services/svg';
 import { anchorOn, anchorOnSide, centerOf, snapToPerimeter, snapToPolygonOutline } from '../services/routing/anchors';
@@ -103,6 +104,7 @@ export function useEdgeDrag(svgHostRef: React.RefObject<HTMLElement>, deps?: unk
           startClientX: e.clientX,
           startClientY: e.clientY,
           moved: false,
+          committed: false,
         };
       } else {
         // anchor drag
@@ -116,6 +118,7 @@ export function useEdgeDrag(svgHostRef: React.RefObject<HTMLElement>, deps?: unk
           role,
           nodeId,
           pointerId: e.pointerId,
+          committed: false,
         };
       }
 
@@ -136,6 +139,13 @@ export function useEdgeDrag(svgHostRef: React.RefObject<HTMLElement>, deps?: unk
           // Below threshold — don't visually move the handle or reroute yet.
           return;
         }
+      }
+
+      // First move-that-mutates — snapshot BEFORE any store write so undo
+      // can walk back to the pre-drag state.
+      if (!dragCtx.committed) {
+        useHistoryStore.getState().commit();
+        dragCtx.committed = true;
       }
 
       const { svgEl, handle } = dragCtx;
@@ -457,6 +467,8 @@ interface WaypointDragCtx {
   startClientY: number;
   /** True once pointer has moved beyond DRAG_THRESHOLD_PX from start. */
   moved: boolean;
+  /** True once a history snapshot has been committed for this drag. */
+  committed: boolean;
 }
 
 interface AnchorDragCtx {
@@ -467,6 +479,8 @@ interface AnchorDragCtx {
   role: 'source' | 'target';
   nodeId: string;
   pointerId: number;
+  /** True once a history snapshot has been committed for this drag. */
+  committed: boolean;
 }
 
 type DragCtx = WaypointDragCtx | AnchorDragCtx;

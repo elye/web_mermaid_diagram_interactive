@@ -1,8 +1,14 @@
 /**
  * historyStore — coarse-grained undo/redo over serialisable app snapshots.
  *
- * We snapshot (source, positionOverrides, nodeStyles, edgeStyles, annotations)
- * on each user commit and keep up to HISTORY_LIMIT entries.
+ * We snapshot every user-visible piece of persistent state on each commit
+ * and keep up to HISTORY_LIMIT entries. Covers:
+ *   • source (Mermaid text)
+ *   • positionOverrides            (node drag)
+ *   • edgeWaypoints                (waypoint drag)
+ *   • edgeAnchorOverrides          (anchor drag)
+ *   • nodeStyles / edgeStyles      (attribute changes)
+ *   • annotations
  */
 import { create } from 'zustand';
 import { HISTORY_LIMIT } from '@/shared/constants/defaults';
@@ -12,6 +18,8 @@ import { useStyleStore } from './styleStore';
 interface Snapshot {
   source: string;
   positionOverrides: Record<string, { x: number; y: number }>;
+  edgeWaypoints: Record<string, unknown>;
+  edgeAnchorOverrides: Record<string, unknown>;
   nodeStyles: Record<string, unknown>;
   edgeStyles: Record<string, unknown>;
   annotations: unknown[];
@@ -26,15 +34,21 @@ interface HistoryState {
   clear: () => void;
 }
 
+function clone<T>(v: T): T {
+  return JSON.parse(JSON.stringify(v)) as T;
+}
+
 function snapshot(): Snapshot {
   const d = useDiagramStore.getState();
   const s = useStyleStore.getState();
   return {
     source: d.source,
-    positionOverrides: JSON.parse(JSON.stringify(d.positionOverrides)),
-    nodeStyles: JSON.parse(JSON.stringify(s.nodeStyles)),
-    edgeStyles: JSON.parse(JSON.stringify(s.edgeStyles)),
-    annotations: JSON.parse(JSON.stringify(s.annotations)),
+    positionOverrides: clone(d.positionOverrides),
+    edgeWaypoints: clone(d.edgeWaypoints),
+    edgeAnchorOverrides: clone(d.edgeAnchorOverrides),
+    nodeStyles: clone(s.nodeStyles),
+    edgeStyles: clone(s.edgeStyles),
+    annotations: clone(s.annotations),
   };
 }
 
@@ -42,6 +56,8 @@ function apply(snap: Snapshot) {
   useDiagramStore.getState().hydrate({
     source: snap.source,
     positionOverrides: snap.positionOverrides,
+    edgeWaypoints: snap.edgeWaypoints as never,
+    edgeAnchorOverrides: snap.edgeAnchorOverrides as never,
   });
   useStyleStore.getState().hydrate({
     nodeStyles: snap.nodeStyles as Record<string, never>,

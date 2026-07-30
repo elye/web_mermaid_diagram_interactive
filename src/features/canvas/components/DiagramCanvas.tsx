@@ -51,8 +51,9 @@ export function DiagramCanvas() {
   );
 
   // A stable string we can use as a dep for useEdgeDrag so handles
-  // re-inject when selection or edge-styles change.
-  const edgeDragDeps = `${svg}|${[...selectedEdgeIds].join(',')}|${JSON.stringify(edgeStyles)}|${JSON.stringify(edgeAnchorOverrides)}`;
+  // re-inject when selection, edge-styles, waypoints, or anchor overrides
+  // change (e.g. after undo/redo).
+  const edgeDragDeps = `${svg}|${[...selectedEdgeIds].join(',')}|${JSON.stringify(edgeStyles)}|${JSON.stringify(edgeAnchorOverrides)}|${JSON.stringify(edgeWaypoints)}`;
 
   const { onPointerDown } = useCanvasInteraction(containerRef);
   useNodeDrag(svgHostRef);
