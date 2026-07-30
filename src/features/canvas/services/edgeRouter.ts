@@ -117,7 +117,9 @@ export function routeAllEdges(svg: SVGSVGElement): void {
     const r = nodeRect(g);
     if (r) rects.set(id, r);
   });
-  if (rects.size < 2) return;
+  // Note: we DON'T short-circuit on rects.size < 2 — a diagram with a single
+  // self-loop (`D --> D`) is legal and needs routing too.
+  if (rects.size === 0) return;
 
   const edges = svg.querySelectorAll<SVGPathElement>('path[data-edge-id]');
   edges.forEach((path) => {
@@ -144,7 +146,14 @@ export function routeAllEdges(svg: SVGSVGElement): void {
         path.setAttribute('data-edge-target', tgt);
       }
     }
-    if (!srcRect || !tgtRect || srcRect === tgtRect) return;
+    if (!srcRect || !tgtRect) return;
+
+    // Self-loop (e.g. `D --> D`): draw a small kidney-shaped loop on the
+    // right side of the node so it stays visibly attached after drags.
+    if (src && tgt && src === tgt) {
+      path.setAttribute('d', selfLoopPath(srcRect));
+      return;
+    }
 
     const tgtCenter = center(tgtRect);
     const srcCenter = center(srcRect);
@@ -154,20 +163,54 @@ export function routeAllEdges(svg: SVGSVGElement): void {
   });
 
   // Also move any edge labels to sit near the midpoint of their new path.
+  // Skip empty labels — those are placeholder groups Mermaid emits for
+  // unlabeled edges, and moving them accomplishes nothing.
   const labels = svg.querySelectorAll<SVGGElement>('g.edgeLabel[data-edge-id]');
   labels.forEach((label) => {
+    if (!(label.textContent ?? '').trim()) return;
     const id = label.getAttribute('data-edge-id')!;
     const path = svg.querySelector<SVGPathElement>(`path[data-edge-id="${cssEscape(id)}"]`);
     if (!path) return;
-    try {
-      // getPointAtLength is supported in real browsers; falls back to midpoint.
-      const len = path.getTotalLength();
-      const mid = path.getPointAtLength(len / 2);
-      label.setAttribute('transform', `translate(${mid.x}, ${mid.y})`);
-    } catch {
-      /* jsdom */
-    }
+    const mid = pathMidpoint(path);
+    if (!mid) return;
+    label.setAttribute('transform', `translate(${mid.x}, ${mid.y})`);
   });
+}
+
+/**
+ * Draw a small self-loop on the right of `rect`. Anchored just above and
+ * just below the right-mid, curving out and back — visually the same
+ * kidney-shape Mermaid produces, but always attached to the (possibly
+ * dragged) node.
+ */
+function selfLoopPath(rect: Rect): string {
+  const cy = rect.y + rect.height / 2;
+  const rightX = rect.x + rect.width;
+  const size = Math.max(20, Math.min(40, rect.height * 0.7));
+  const start: Point = { x: rightX, y: cy - size * 0.25 };
+  const end: Point = { x: rightX, y: cy + size * 0.25 };
+  const outX = rightX + size;
+  return `M ${start.x} ${start.y} C ${outX} ${cy - size}, ${outX} ${cy + size}, ${end.x} ${end.y}`;
+}
+
+/**
+ * Midpoint of a path. In real browsers we use `getPointAtLength(len/2)`;
+ * in jsdom (used by tests) both `getTotalLength` and `getPointAtLength`
+ * are unreliable, so fall back to parsing the `d` attribute directly.
+ */
+function pathMidpoint(path: SVGPathElement): Point | null {
+  try {
+    const len = path.getTotalLength();
+    if (len > 0) {
+      const p = path.getPointAtLength(len / 2);
+      if (Number.isFinite(p.x) && Number.isFinite(p.y)) return { x: p.x, y: p.y };
+    }
+  } catch {
+    /* jsdom */
+  }
+  const ends = pathEndpoints(path);
+  if (!ends) return null;
+  return { x: (ends.start.x + ends.end.x) / 2, y: (ends.start.y + ends.end.y) / 2 };
 }
 
 /**

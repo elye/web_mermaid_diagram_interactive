@@ -131,10 +131,12 @@ export function annotateInteractiveElements(svgString: string): string {
     'g.edgePaths > path, path.flowchart-link, path[class*="edge"]',
   );
   let counter = 0;
+  const edgeIdsInOrder: string[] = [];
   edgeGroups.forEach((p) => {
     counter += 1;
     const rawId = p.getAttribute('id') ?? `edge-${counter}`;
     p.setAttribute('data-edge-id', rawId);
+    edgeIdsInOrder.push(rawId);
     // Disambiguate source/target using the known node-id set so ids like
     // `L-Start-Decision-0` don't get chopped to `Start-Decisio` + `n`.
     const endpoints = extractEdgeEndpoints(rawId, nodeIdSet);
@@ -144,13 +146,14 @@ export function annotateInteractiveElements(svgString: string): string {
     }
   });
 
-  // Tag edge labels with their edge id too, so the router can move them
-  // alongside the path.
-  const edgeLabels = svg.querySelectorAll('g.edgeLabel[id], .edgeLabel[id]');
-  edgeLabels.forEach((label) => {
-    const rawId = label.getAttribute('id') ?? '';
-    // Mermaid edge labels are usually "L-A-B-0" too, but sometimes wrapped.
-    if (rawId) label.setAttribute('data-edge-id', rawId);
+  // Tag edge labels with their edge id too so the router can move them
+  // alongside the path. Mermaid does NOT put an `id` on `g.edgeLabel`, but it
+  // emits one `<g class="edgeLabel">` per edge in the same DOM order as the
+  // edge paths — so we match them positionally against `edgeIdsInOrder`.
+  const edgeLabels = svg.querySelectorAll('g.edgeLabels > g.edgeLabel');
+  edgeLabels.forEach((label, idx) => {
+    const id = edgeIdsInOrder[idx];
+    if (id) label.setAttribute('data-edge-id', id);
   });
 
   // Initial routing pass so anchors are already aligned when the SVG appears.

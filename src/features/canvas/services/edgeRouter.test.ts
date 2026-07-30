@@ -275,4 +275,92 @@ describe('edgeRouter', () => {
     expect(d).toMatch(/^M 80 40 /);
     expect(d).toMatch(/ 120 40$/);
   });
+
+  /**
+   * Regression: `D --> D` (self-loop). Before the fix, `routeAllEdges`
+   * short-circuited on `srcRect === tgtRect`, leaving Mermaid's originally
+   * emitted loop path in place — which meant the loop stayed at the node's
+   * ORIGINAL location and detached as soon as the user dragged D.
+   */
+  it('draws a self-loop path anchored to the node (regression: D → D)', () => {
+    const svg = loadSvg(`
+      <svg xmlns="http://www.w3.org/2000/svg">
+        <g class="nodes">
+          <g class="node" id="flowchart-D-0" transform="translate(400, 300)">
+            <rect x="-30" y="-15" width="60" height="30"/>
+          </g>
+        </g>
+        <g class="edgePaths">
+          <path class="edge" id="L-D-D-0" d="M 100 100 L 110 100"/>
+        </g>
+      </svg>`);
+
+    // Move D and reroute.
+    svg.querySelector<SVGGElement>('g[data-node-id="D"]')!
+      .setAttribute('transform', 'translate(600, 250)');
+    routeAllEdges(svg);
+
+    const d = svg.querySelector<SVGPathElement>('path[data-edge-id="L-D-D-0"]')!.getAttribute('d')!;
+    // Rect after move: x=570..630, y=235..265, cy=250. Loop starts on the
+    // right side (x=630).
+    expect(d).toMatch(/^M 630 /);
+    // The loop must curve OUTSIDE the rect (control points x > 630).
+    const nums = d.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
+    // At least one control-point x-coord must be > right edge.
+    const xs = nums.filter((_, i) => i % 2 === 0);
+    expect(Math.max(...xs)).toBeGreaterThan(630);
+  });
+
+  /**
+   * Regression: edge labels ("Yes" / "No") stayed at Mermaid's initial
+   * layout coordinates because svgManipulator was looking for `id`
+   * attributes on `g.edgeLabel` that Mermaid doesn't emit. This test uses
+   * positional matching (label i ↔ edge path i) and verifies that after
+   * `routeAllEdges` the label transform sits near the new midpoint.
+   */
+  it('moves edge labels to the midpoint of the rerouted path', () => {
+    const svg = loadSvg(`
+      <svg xmlns="http://www.w3.org/2000/svg">
+        <g class="nodes">
+          <g class="node" id="flowchart-A-0" transform="translate(50, 40)">
+            <rect x="-30" y="-15" width="60" height="30"/>
+          </g>
+          <g class="node" id="flowchart-B-1" transform="translate(250, 40)">
+            <rect x="-30" y="-15" width="60" height="30"/>
+          </g>
+        </g>
+        <g class="edgePaths">
+          <path class="edge" id="L-A-B-0" d="M 80 40 L 220 40"/>
+        </g>
+        <g class="edgeLabels">
+          <g class="edgeLabel" transform="translate(999, 999)">
+            <span class="edgeLabel">Yes</span>
+          </g>
+        </g>
+      </svg>`);
+
+    // Annotation should have positionally linked the label to L-A-B-0.
+    const label = svg.querySelector<SVGGElement>('g.edgeLabel[data-edge-id="L-A-B-0"]')!;
+    expect(label).not.toBeNull();
+
+    // Move B so the edge midpoint moves too.
+    svg.querySelector<SVGGElement>('g[data-node-id="B"]')!
+      .setAttribute('transform', 'translate(500, 100)');
+    routeAllEdges(svg);
+
+    // Label transform should have been updated to something close to the
+    // midpoint of the new bezier (roughly between (80,40) and (470,100)).
+    const t = label.getAttribute('transform')!;
+    // Not the sentinel 999,999 anymore.
+    expect(t).not.toContain('999');
+    const m = /translate\(([-\d.]+),\s*([-\d.]+)\)/.exec(t)!;
+    const lx = Number(m[1]);
+    const ly = Number(m[2]);
+    // Midpoint of endpoints (80,40)→(470,100) = (275,70). Bezier midpoint
+    // may drift a bit, so accept a reasonable band.
+    expect(lx).toBeGreaterThan(150);
+    expect(lx).toBeLessThan(400);
+    expect(ly).toBeGreaterThan(30);
+    expect(ly).toBeLessThan(110);
+  });
 });
