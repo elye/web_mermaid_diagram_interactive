@@ -142,12 +142,22 @@ function routeSingleEdge(
   const srcPoly = src ? polygons.get(src) : undefined;
   const tgtPoly = tgt ? polygons.get(tgt) : undefined;
 
+  // Default-anchor direction: when the edge has waypoints, the anchor
+  // should face the FIRST/LAST waypoint (that's the actual direction
+  // the arrow travels immediately after leaving the node). Without
+  // waypoints, fall back to facing the opposite node's center.
+  const srcFacing = waypoints && waypoints.length > 0 ? waypoints[0] : centerOf(tgtRect);
+  const tgtFacing =
+    waypoints && waypoints.length > 0
+      ? waypoints[waypoints.length - 1]
+      : centerOf(srcRect);
+
   let a = anchorOverride?.source
     ? anchorOnSide(srcRect, anchorOverride.source)
-    : anchorOn(srcRect, centerOf(tgtRect));
+    : anchorOn(srcRect, srcFacing);
   let b = anchorOverride?.target
     ? anchorOnSide(tgtRect, anchorOverride.target)
-    : anchorOn(tgtRect, centerOf(srcRect));
+    : anchorOn(tgtRect, tgtFacing);
 
   // For non-rectangular shapes (diamonds/hexagons), the bbox-based anchor
   // above lands OUTSIDE the actual outline. Snap it back onto the polygon.

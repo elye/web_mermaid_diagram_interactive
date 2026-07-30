@@ -156,10 +156,16 @@ export function useEdgeDrag(svgHostRef: React.RefObject<HTMLElement>, deps?: unk
         existing[waypointIndex] = { x: pt.x, y: pt.y };
         const waypointMap = new Map(Object.entries(edgeWaypoints));
         waypointMap.set(edgeId, existing);
+        // Auto-flow: while the user is shaping the curve via its waypoint,
+        // release any prior anchor overrides on THIS edge so the router
+        // re-derives the anchor from the closest side facing the new
+        // waypoint position. Persisted on pointer-up (see onPointerUp).
+        const anchorMap = new Map(Object.entries(edgeAnchorOverrides));
+        anchorMap.delete(edgeId);
         routeAllEdges(svgEl, {
           lineStyles: lineStyleMap,
           waypoints: waypointMap,
-          anchorOverrides: new Map(Object.entries(edgeAnchorOverrides)),
+          anchorOverrides: anchorMap,
         });
         // Miro-style inverse-solve: with quadratic (1 waypoint) or cubic
         // (2 waypoint) Bezier, sibling waypoints remain ON the curve at
@@ -226,6 +232,11 @@ export function useEdgeDrag(svgHostRef: React.RefObject<HTMLElement>, deps?: unk
         existing[idx] = droppedPt;
 
         useDiagramStore.getState().setEdgeWaypoints(edgeId, existing);
+        // Persist the auto-flow: dragging the waypoint means the user
+        // wants the anchors to follow the curve. Drop any prior manual
+        // anchor overrides so subsequent renders keep re-deriving the
+        // anchor from geometry (facing the first/last waypoint).
+        useDiagramStore.getState().clearEdgeAnchorOverrides(edgeId);
       } else {
         // anchor drag
         const { role, nodeId } = dragCtx;
