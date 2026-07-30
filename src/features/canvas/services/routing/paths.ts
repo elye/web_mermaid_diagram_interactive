@@ -1,6 +1,13 @@
 /**
  * Path shape emitters — pure functions from geometry to SVG `d` strings.
  * Kept UI-agnostic: routers may pick between these based on edge topology.
+ *
+ * Supported styles:
+ *   bezierPath      — smooth cubic bezier (default, "curve")
+ *   straightPath    — single straight line segment
+ *   orthogonalPath  — two axis-aligned segments (L-shaped / Z-shaped)
+ *   waypointCurvePath — cubic bezier routed through a user-dragged midpoint
+ *   selfLoopPath    — kidney loop for self-edges
  */
 import type { BBox, Point } from '@/shared/types/diagram';
 
@@ -25,6 +32,56 @@ export function bezierPath(a: Point, b: Point): string {
     ? { x: b.x - Math.sign(dx) * bend, y: b.y }
     : { x: b.x, y: b.y - Math.sign(dy) * bend };
   return `M ${a.x} ${a.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${b.x} ${b.y}`;
+}
+
+/**
+ * Straight line from `a` to `b`.
+ */
+export function straightPath(a: Point, b: Point): string {
+  return `M ${a.x} ${a.y} L ${b.x} ${b.y}`;
+}
+
+/**
+ * Orthogonal (right-angle) path from `a` to `b`.
+ *
+ * Strategy: axis-aligned segments with a single elbow.  We pick the elbow
+ * direction that matches the dominant movement axis of the anchor points so
+ * the path always exits its source anchor in the same direction as the
+ * bezier default would.
+ *
+ *   horizontal-first (|dx| ≥ |dy|):   a → (mid-x, a.y) → (mid-x, b.y) → b
+ *   vertical-first   (|dy| > |dx|):   a → (a.x, mid-y) → (b.x, mid-y) → b
+ */
+export function orthogonalPath(a: Point, b: Point): string {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    const midX = (a.x + b.x) / 2;
+    return `M ${a.x} ${a.y} L ${midX} ${a.y} L ${midX} ${b.y} L ${b.x} ${b.y}`;
+  }
+  const midY = (a.y + b.y) / 2;
+  return `M ${a.x} ${a.y} L ${a.x} ${midY} L ${b.x} ${midY} L ${b.x} ${b.y}`;
+}
+
+/**
+ * Cubic bezier routed through a single user-dragged waypoint `w`.
+ *
+ * Two separate cubic segments are stitched so the path is C1-continuous
+ * at the waypoint: a→w→b.  Each segment uses a simple "pull toward
+ * waypoint" heuristic for control points.
+ */
+export function waypointCurvePath(a: Point, w: Point, b: Point): string {
+  // Control points for segment a→w: pull from both ends towards the waypoint.
+  const c1ax = a.x + (w.x - a.x) * 0.5;
+  const c1ay = a.y + (w.y - a.y) * 0.5;
+  // Control points for segment w→b.
+  const c2bx = w.x + (b.x - w.x) * 0.5;
+  const c2by = w.y + (b.y - w.y) * 0.5;
+  return (
+    `M ${a.x} ${a.y} ` +
+    `C ${c1ax} ${c1ay}, ${w.x} ${w.y}, ${w.x} ${w.y} ` +
+    `C ${w.x} ${w.y}, ${c2bx} ${c2by}, ${b.x} ${b.y}`
+  );
 }
 
 /**

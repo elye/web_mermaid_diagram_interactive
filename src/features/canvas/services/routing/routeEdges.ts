@@ -9,28 +9,48 @@
  *        b. If either is missing, run geometry-based inference against
  *           the current path endpoints and cache the result on the path.
  *        c. If source === target, emit a self-loop.
- *        d. Otherwise, anchor to closest sides and emit a bezier.
+ *        d. Otherwise, anchor to closest sides and emit the appropriate
+ *           path shape (curve / straight / orthogonal) based on per-edge
+ *           line-style and optional waypoints.
  *   3. Re-position edge labels to sit near the new midpoint of each path.
  *
  * The router does NOT read `getBBox()` or call `getTotalLength()` on the
  * critical path — it uses static-attribute helpers from `../svg/*` so it
  * stays fast and jsdom-compatible.
  */
-import type { BBox } from '@/shared/types/diagram';
+import type { BBox, EdgeLineStyle, EdgeWaypoint, EdgeAnchorOverride } from '@/shared/types/diagram';
 import { groupBBox, fallbackBBox, pathEndpoints, pathMidpoint } from '../svg';
-import { anchorOn, centerOf } from './anchors';
-import { bezierPath, selfLoopPath } from './paths';
+import { anchorOn, anchorOnSide, centerOf } from './anchors';
+import { bezierPath, straightPath, orthogonalPath, waypointCurvePath, selfLoopPath } from './paths';
 import { nearestNodeId } from './endpointInference';
+
+export interface RouteOptions {
+  /** Per-edge line style overrides: edgeId → style */
+  lineStyles?: ReadonlyMap<string, EdgeLineStyle>;
+  /** Per-edge user waypoints: edgeId → list of waypoints */
+  waypoints?: ReadonlyMap<string, EdgeWaypoint[]>;
+  /**
+   * Per-edge anchor overrides: edgeId → { source?, target? }
+   * When provided, the auto-computed anchor side is replaced by the
+   * user-pinned side + offset.
+   */
+  anchorOverrides?: ReadonlyMap<string, { source?: EdgeAnchorOverride; target?: EdgeAnchorOverride }>;
+}
 
 /**
  * Public entry point. Called after every render and every drag frame.
+ * `options` may carry per-edge line style and waypoint data from the stores.
  */
-export function routeAllEdges(svg: SVGSVGElement): void {
+export function routeAllEdges(svg: SVGSVGElement, options: RouteOptions = {}): void {
   const rects = collectNodeRects(svg);
   if (rects.size === 0) return;
 
   svg.querySelectorAll<SVGPathElement>('path[data-edge-id]').forEach((path) => {
-    routeSingleEdge(path, rects);
+    const id = path.getAttribute('data-edge-id') ?? '';
+    const lineStyle = options.lineStyles?.get(id);
+    const waypts = options.waypoints?.get(id);
+    const anchorOverride = options.anchorOverrides?.get(id);
+    routeSingleEdge(path, rects, lineStyle, waypts, anchorOverride);
   });
 
   repositionEdgeLabels(svg);
@@ -61,6 +81,9 @@ function collectNodeRects(svg: SVGSVGElement): Map<string, BBox> {
 function routeSingleEdge(
   path: SVGPathElement,
   rects: ReadonlyMap<string, BBox>,
+  lineStyle: EdgeLineStyle | undefined,
+  waypoints: EdgeWaypoint[] | undefined,
+  anchorOverride?: { source?: EdgeAnchorOverride; target?: EdgeAnchorOverride },
 ): void {
   let src = path.getAttribute('data-edge-source');
   let tgt = path.getAttribute('data-edge-target');
@@ -86,9 +109,25 @@ function routeSingleEdge(
     return;
   }
 
-  const a = anchorOn(srcRect, centerOf(tgtRect));
-  const b = anchorOn(tgtRect, centerOf(srcRect));
-  path.setAttribute('d', bezierPath(a, b));
+  // Resolve anchor points: use override if provided, else compute from geometry.
+  const a = anchorOverride?.source
+    ? anchorOnSide(srcRect, anchorOverride.source)
+    : anchorOn(srcRect, centerOf(tgtRect));
+  const b = anchorOverride?.target
+    ? anchorOnSide(tgtRect, anchorOverride.target)
+    : anchorOn(tgtRect, centerOf(srcRect));
+
+  // Choose path shape based on line style.
+  const style = lineStyle ?? 'curve';
+  if (style === 'straight') {
+    path.setAttribute('d', straightPath(a, b));
+  } else if (style === 'orthogonal') {
+    path.setAttribute('d', orthogonalPath(a, b));
+  } else {
+    // 'curve' — use waypoint if available, else standard bezier.
+    const w = waypoints?.[0];
+    path.setAttribute('d', w ? waypointCurvePath(a, w, b) : bezierPath(a, b));
+  }
 }
 
 function inferEndpoints(

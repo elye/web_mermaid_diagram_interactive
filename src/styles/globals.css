@@ -69,3 +69,16 @@ body {
   stroke: var(--mf-accent) !important;
   stroke-width: 2.5px !important;
 }
+
+/* Edge paths are wider so they're easier to click */
+path[data-edge-id] {
+  cursor: pointer;
+  stroke-width: 2px;
+  /* Wider invisible hit area via filter */
+  pointer-events: stroke;
+}
+.mf-edge--selected {
+  stroke: var(--mf-accent) !important;
+  stroke-width: 3px !important;
+  filter: drop-shadow(0 0 3px var(--mf-accent));
+}
