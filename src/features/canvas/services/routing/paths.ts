@@ -64,53 +64,75 @@ export function orthogonalPath(a: Point, b: Point): string {
 }
 
 /**
- * Smooth cubic bezier routed through a single user-dragged waypoint `w`.
- *
- * Uses Catmull-Rom → cubic Bézier conversion so the curve passes through
- * all three points (a, w, b) with a continuous tangent at `w` — no kink.
- *
- * The tangent at the interior point `w` is the vector from `a` to `b`
- * scaled by the Catmull-Rom tension (α = 0.5 gives centripetal CR).
- * The two cubic segments share that tangent so the junction is C1.
- *
- * For the boundary points we use a phantom "virtual" control point by
- * reflecting: the tangent at `a` points toward `w`, and at `b` away from `w`.
+ * @deprecated Use `catmullRomPath` for multi-waypoint curves.
+ * Kept as a thin wrapper for any direct callers during transition.
  */
 export function waypointCurvePath(a: Point, w: Point, b: Point): string {
-  // Catmull-Rom tension (0.5 = centripetal, feels natural for drag handles).
-  const alpha = 0.5;
+  return catmullRomPath(a, [w], b);
+}
 
-  // Tangent at interior waypoint w: proportional to (b - a).
-  const twx = (b.x - a.x) * alpha;
-  const twy = (b.y - a.y) * alpha;
+/**
+ * Catmull-Rom spline that passes THROUGH every point in:
+ *   [src anchor]  →  waypoints[0]  →  …  →  waypoints[N-1]  →  [tgt anchor]
+ *
+ * Algorithm: Catmull-Rom → cubic Bézier conversion.
+ * For each interior segment P[i] → P[i+1] the two cubic control points are:
+ *
+ *   CP1 = P[i]   + tangent(P[i])   / 3
+ *   CP2 = P[i+1] - tangent(P[i+1]) / 3
+ *
+ * where the tangent at interior point P[k] is:
+ *   T[k] = (P[k+1] - P[k-1]) * tension
+ *
+ * At the boundary endpoints the tangent points directly towards/from the
+ * first/last interior neighbour (gives a natural open-ended curve).
+ *
+ * tension = 0.5 gives the classic centripetal Catmull-Rom feel.
+ */
+export function catmullRomPath(src: Point, waypoints: Point[], tgt: Point): string {
+  // Full ordered point sequence.
+  const pts: Point[] = [src, ...waypoints, tgt];
+  const n = pts.length;
 
-  // Tangent at start a: pointing toward w (half of a→w vector).
-  const tax = (w.x - a.x) * alpha;
-  const tay = (w.y - a.y) * alpha;
+  // Need at least 2 points to draw anything.
+  if (n < 2) return `M ${src.x} ${src.y}`;
 
-  // Tangent at end b: pointing away from w (half of w→b vector).
-  const tbx = (b.x - w.x) * alpha;
-  const tby = (b.y - w.y) * alpha;
+  const tension = 0.5;
 
-  // Segment 1: a → w
-  // Cubic control points: (a + tax/3, w - twx/3)
-  const c1x = a.x + tax / 3;
-  const c1y = a.y + tay / 3;
-  const c2x = w.x - twx / 3;
-  const c2y = w.y - twy / 3;
+  // Compute tangents for all points.
+  // Boundary tangents point directly to/from the adjacent point.
+  const tx: number[] = new Array(n);
+  const ty: number[] = new Array(n);
+  for (let i = 0; i < n; i++) {
+    if (i === 0) {
+      tx[i] = (pts[1].x - pts[0].x) * tension;
+      ty[i] = (pts[1].y - pts[0].y) * tension;
+    } else if (i === n - 1) {
+      tx[i] = (pts[n - 1].x - pts[n - 2].x) * tension;
+      ty[i] = (pts[n - 1].y - pts[n - 2].y) * tension;
+    } else {
+      tx[i] = (pts[i + 1].x - pts[i - 1].x) * tension;
+      ty[i] = (pts[i + 1].y - pts[i - 1].y) * tension;
+    }
+  }
 
-  // Segment 2: w → b
-  // Cubic control points: (w + twx/3, b - tbx/3)
-  const c3x = w.x + twx / 3;
-  const c3y = w.y + twy / 3;
-  const c4x = b.x - tbx / 3;
-  const c4y = b.y - tby / 3;
+  // Build SVG path: M then one cubic Bézier segment per consecutive pair.
+  let d = `M ${fmt(pts[0].x)} ${fmt(pts[0].y)}`;
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = pts[i];
+    const p1 = pts[i + 1];
+    const cp1x = p0.x + tx[i] / 3;
+    const cp1y = p0.y + ty[i] / 3;
+    const cp2x = p1.x - tx[i + 1] / 3;
+    const cp2y = p1.y - ty[i + 1] / 3;
+    d += ` C ${fmt(cp1x)} ${fmt(cp1y)}, ${fmt(cp2x)} ${fmt(cp2y)}, ${fmt(p1.x)} ${fmt(p1.y)}`;
+  }
+  return d;
+}
 
-  return (
-    `M ${a.x} ${a.y} ` +
-    `C ${c1x} ${c1y}, ${c2x} ${c2y}, ${w.x} ${w.y} ` +
-    `C ${c3x} ${c3y}, ${c4x} ${c4y}, ${b.x} ${b.y}`
-  );
+function fmt(n: number): string {
+  // Round to 2 dp to keep SVG compact.
+  return String(Math.round(n * 100) / 100);
 }
 
 /**

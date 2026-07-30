@@ -144,8 +144,8 @@ function annotateEdges(svg: SVGSVGElement, nodeIdSet: ReadonlySet<string>): stri
       p.setAttribute('data-edge-target', endpoints.target);
     }
 
-    // Inject a wide transparent hit-area sibling BEFORE the visible path so
-    // it sits underneath (z-order) but still catches pointer events.
+    // Inject a wide transparent hit-area sibling AFTER the visible path so
+    // it paints on top and reliably intercepts pointer events.
     // Uses `data-hit-edge-id` (not `data-edge-id`) so routeAllEdges and
     // extractEdges don't process it as a real edge path.
     // Skip if already injected (idempotent).
@@ -157,7 +157,8 @@ function annotateEdges(svg: SVGSVGElement, nodeIdSet: ReadonlySet<string>): stri
       hit.setAttribute('class', 'mf-edge-hit');
       hit.setAttribute('data-hit-edge-id', rawId);
       hit.setAttribute('d', p.getAttribute('d') ?? '');
-      p.parentElement?.insertBefore(hit, p);
+      // Insert AFTER the visible path (nextSibling may be null → appends at end)
+      p.parentElement?.insertBefore(hit, p.nextSibling);
     }
   });
   return idsInOrder;

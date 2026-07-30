@@ -92,38 +92,62 @@ export function DiagramCanvas() {
   }, [positionOverrides, svg, lineStyleMap, waypointMap, anchorOverrideMap]);
 
   // Apply per-node/edge style overrides.
-  // We deliberately apply every property unconditionally (not just when
-  // truthy) so that resetting a value to its default actually takes effect.
-  // All shape children are updated, not just the first one.
+  //
+  // We iterate ALL nodes and edges in the DOM, not just those with overrides,
+  // so that when an override is removed (reset) the inline styles are explicitly
+  // cleared back to '' — letting Mermaid's default styles take over immediately.
+  //
+  // For selected edges we also apply the accent colour inline (so there's no
+  // dependency on !important CSS rules, which would block user overrides).
   useEffect(() => {
     const host = svgHostRef.current;
     if (!host) return;
-    Object.entries(nodeStyles).forEach(([id, style]) => {
-      const g = host.querySelector(`g[data-node-id="${cssEscape(id)}"]`);
-      if (!g) return;
-      // Apply to ALL shape children so compound shapes (e.g. diamonds with
-      // a bounding rect + polygon) both update.
+
+    // ── Nodes ──
+    host.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
+      const id = g.getAttribute('data-node-id')!;
+      const style = nodeStyles[id] ?? {};
+      const isSelected = selectedNodeIds.has(id);
+
       g.querySelectorAll<SVGElement>('rect, polygon, circle, ellipse, path').forEach((shape) => {
         shape.style.fill = style.fill ?? '';
-        shape.style.stroke = style.stroke ?? '';
-        shape.style.strokeWidth = style.strokeWidth != null ? `${style.strokeWidth}px` : '';
+        // Selected: show accent stroke. Honour user's strokeWidth if set, else 2.5px.
+        shape.style.stroke = isSelected
+          ? `var(--mf-accent, #0ea5e9)`
+          : (style.stroke ?? '');
+        shape.style.strokeWidth =
+          style.strokeWidth != null
+            ? `${style.strokeWidth}px`
+            : isSelected
+              ? '2.5px'
+              : '';
       });
-      const text = g.querySelector('text, .nodeLabel') as SVGElement | HTMLElement | null;
+
+      const text = g.querySelector('text, .nodeLabel') as HTMLElement | null;
       if (text) {
-        (text as HTMLElement).style.color = style.fontColor ?? '';
-        (text as HTMLElement).style.fontSize = style.fontSize != null ? `${style.fontSize}px` : '';
+        text.style.color = style.fontColor ?? '';
+        text.style.fontSize = style.fontSize != null ? `${style.fontSize}px` : '';
       }
     });
-    Object.entries(edgeStyles).forEach(([id, style]) => {
-      const p = host.querySelector(`path[data-edge-id="${cssEscape(id)}"]`) as SVGElement | null;
-      if (!p) return;
-      p.style.stroke = style.stroke ?? '';
-      p.style.strokeWidth = style.strokeWidth != null ? `${style.strokeWidth}px` : '';
+
+    // ── Edges ──
+    host.querySelectorAll<SVGPathElement>('path[data-edge-id]').forEach((p) => {
+      const id = p.getAttribute('data-edge-id')!;
+      const style = edgeStyles[id] ?? {};
+      const isSelected = selectedEdgeIds.has(id);
+
+      // Selected: accent colour; honour user's strokeWidth if set, else 3px default.
+      p.style.stroke = isSelected
+        ? `var(--mf-accent, #0ea5e9)`
+        : (style.stroke ?? '');
+      p.style.strokeWidth =
+        style.strokeWidth != null
+          ? `${style.strokeWidth}px`
+          : isSelected
+            ? '3px'
+            : '';
       p.style.strokeDasharray = style.dashArray ?? '';
     });
-  // Re-run when selection changes too — selection CSS uses class rules which
-  // would be overridden by inline styles only if the inline styles are present.
-  // Re-applying here ensures strokeWidth overrides are always in DOM.
   }, [nodeStyles, edgeStyles, svg, selectedNodeIds, selectedEdgeIds]);
 
   // Wire edge click → selectEdge. Mounted whenever the SVG changes so

@@ -81,19 +81,19 @@ path[data-edge-id] {
   pointer-events: visibleStroke;
 }
 
-/* Wide transparent hit-area sibling injected by annotateEdges so it's
-   always behind the visible path. 16 px makes even thin lines easy to click. */
+/* Wide transparent hit-area sibling injected by annotateEdges.
+   Sits on top of the visible path (inserted after it in DOM order).
+   pointer-events:stroke on a stroked path with a wide invisible stroke
+   gives a generous 20 px click zone around any line. */
 .mf-edge-hit {
   fill: none;
   stroke: transparent;
-  stroke-width: 16px;
+  stroke-width: 20px;
   cursor: pointer;
-  pointer-events: visibleStroke;
+  pointer-events: stroke;
 }
 
 .mf-edge--selected {
-  stroke: var(--mf-accent) !important;
-  stroke-width: 3px !important;
   filter: drop-shadow(0 0 4px var(--mf-accent));
 }
 

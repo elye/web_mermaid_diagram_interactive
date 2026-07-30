@@ -175,9 +175,48 @@ export function useEdgeDrag(svgHostRef: React.RefObject<HTMLElement>, deps?: unk
       if (dragCtx.kind === 'waypoint') {
         const finalX = Number(handle.getAttribute('cx'));
         const finalY = Number(handle.getAttribute('cy'));
-        const existing = [...(useDiagramStore.getState().edgeWaypoints[edgeId] ?? [])];
-        existing[dragCtx.waypointIndex] = { x: finalX, y: finalY };
-        useDiagramStore.getState().setEdgeWaypoints(edgeId, existing);
+        const droppedPt = { x: finalX, y: finalY };
+        const idx = dragCtx.waypointIndex;
+
+        const storeState = useDiagramStore.getState();
+        const existing = [...(storeState.edgeWaypoints[edgeId] ?? [])];
+        // Update the dragged waypoint position.
+        existing[idx] = droppedPt;
+
+        // ── Subdivision: insert midpoint handles on each side ──────────────
+        // Find the "neighbor" points flanking this waypoint (either another
+        // waypoint or the source/target anchor endpoint).
+        const path = svgEl.querySelector<SVGPathElement>(
+          `path[data-edge-id="${cssEscape(edgeId)}"]`,
+        );
+        const beforePt: Point | null =
+          idx > 0
+            ? existing[idx - 1]
+            : (path
+                ? getEdgeAnchorPoint(svgEl, path, 'source', storeState)
+                : null);
+        const afterPt: Point | null =
+          idx < existing.length - 1
+            ? existing[idx + 1]
+            : (path
+                ? getEdgeAnchorPoint(svgEl, path, 'target', storeState)
+                : null);
+
+        // Build the new waypoints array with two midpoints spliced around
+        // the dragged point.
+        const next: typeof existing = [];
+        // Keep everything before dragged index.
+        for (let i = 0; i < idx; i++) next.push(existing[i]);
+        // Midpoint between previous neighbour and dragged point.
+        if (beforePt) next.push(midPt(beforePt, droppedPt));
+        // The dragged point itself.
+        next.push(droppedPt);
+        // Midpoint between dragged point and next neighbour.
+        if (afterPt) next.push(midPt(droppedPt, afterPt));
+        // Keep everything after dragged index.
+        for (let i = idx + 1; i < existing.length; i++) next.push(existing[i]);
+
+        useDiagramStore.getState().setEdgeWaypoints(edgeId, next);
       } else {
         // anchor drag
         const { role, nodeId } = dragCtx;
@@ -424,4 +463,45 @@ function buildLineStyleMap(
 
 function cssEscape(v: string): string {
   return v.replace(/["\\]/g, '\\$&');
+}
+
+/** Midpoint between two points. */
+function midPt(a: Point, b: Point): Point {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+/**
+ * Resolve the current computed anchor point (source or target) for an edge.
+ * Used at waypoint-drag-end to find the neighbour points for subdivision.
+ */
+function getEdgeAnchorPoint(
+  svgEl: SVGSVGElement,
+  path: SVGPathElement,
+  role: 'source' | 'target',
+  storeState: ReturnType<typeof useDiagramStore.getState>,
+): Point | null {
+  const nodeId = path.getAttribute(role === 'source' ? 'data-edge-source' : 'data-edge-target');
+  if (!nodeId) return null;
+  const g = svgEl.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nodeId)}"]`);
+  if (!g) return null;
+  const rect = groupBBox(g);
+  if (!rect) return null;
+
+  const edgeId = path.getAttribute('data-edge-id');
+  const override = edgeId
+    ? storeState.edgeAnchorOverrides[edgeId]?.[role]
+    : undefined;
+
+  if (override) return anchorOnSide(rect, override);
+
+  // Compute auto-anchor toward the opposite node.
+  const otherId = path.getAttribute(
+    role === 'source' ? 'data-edge-target' : 'data-edge-source',
+  );
+  if (!otherId) return centerOf(rect);
+  const otherG = svgEl.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(otherId)}"]`);
+  if (!otherG) return centerOf(rect);
+  const otherRect = groupBBox(otherG);
+  if (!otherRect) return centerOf(rect);
+  return anchorOn(rect, centerOf(otherRect));
 }

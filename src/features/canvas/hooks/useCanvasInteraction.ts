@@ -30,9 +30,17 @@ export function useCanvasInteraction(containerRef: React.RefObject<HTMLElement>)
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
-      // Only pan when starting from the background (not a node).
+      // Only pan when starting from the background (not a node or edge).
+      // Also check `.mf-edge-hit` (hit-area paths use data-hit-edge-id) and
+      // `.mf-edge-handle` (drag handles) so clicks on those don't clear selection.
       const target = e.target as Element;
-      if (target.closest('[data-node-id]') || target.closest('[data-edge-id]')) return;
+      if (
+        target.closest('[data-node-id]') ||
+        target.closest('[data-edge-id]') ||
+        target.closest('[data-hit-edge-id]') ||
+        target.closest('.mf-edge-handle') ||
+        target.closest('.mf-edge-handles')
+      ) return;
 
       // Clicking background clears selection.
       useSelectionStore.getState().clear();

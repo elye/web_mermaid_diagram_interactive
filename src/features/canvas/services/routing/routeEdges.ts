@@ -21,7 +21,7 @@
 import type { BBox, EdgeLineStyle, EdgeWaypoint, EdgeAnchorOverride } from '@/shared/types/diagram';
 import { groupBBox, fallbackBBox, pathEndpoints, pathMidpoint } from '../svg';
 import { anchorOn, anchorOnSide, centerOf } from './anchors';
-import { bezierPath, straightPath, orthogonalPath, waypointCurvePath, selfLoopPath } from './paths';
+import { bezierPath, straightPath, orthogonalPath, catmullRomPath, selfLoopPath } from './paths';
 import { nearestNodeId } from './endpointInference';
 
 export interface RouteOptions {
@@ -125,9 +125,12 @@ function routeSingleEdge(
   } else if (style === 'orthogonal') {
     d = orthogonalPath(a, b);
   } else {
-    // 'curve' — use waypoint if available, else standard bezier.
-    const w = waypoints?.[0];
-    d = w ? waypointCurvePath(a, w, b) : bezierPath(a, b);
+    // 'curve' — Catmull-Rom through all waypoints if any, else standard bezier.
+    if (waypoints && waypoints.length > 0) {
+      d = catmullRomPath(a, waypoints, b);
+    } else {
+      d = bezierPath(a, b);
+    }
   }
   path.setAttribute('d', d);
 
