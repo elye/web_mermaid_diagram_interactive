@@ -20,7 +20,7 @@
  */
 import type { BBox, Point, EdgeLineStyle, EdgeWaypoint, EdgeAnchorOverride } from '@/shared/types/diagram';
 import { groupBBox, groupPolygon, fallbackBBox, pathEndpoints, pathMidpoint } from '../svg';
-import { anchorOn, anchorOnSide, centerOf, outwardNormal, snapToPolygonOutline } from './anchors';
+import { anchorOn, anchorOnSide, centerOf, outwardNormal, polygonOutwardNormal, snapToPolygonOutline } from './anchors';
 import { bezierPath, straightPath, orthogonalPath, waypointBezierPath, selfLoopPath } from './paths';
 import { nearestNodeId } from './endpointInference';
 
@@ -149,18 +149,19 @@ function routeSingleEdge(
     ? anchorOnSide(tgtRect, anchorOverride.target)
     : anchorOn(tgtRect, centerOf(srcRect));
 
-  // Outward normals BEFORE polygon snap — side membership is stable
-  // against the bbox regardless of how the anchor is nudged onto a
-  // sloped polygon edge. These force the curve to leave/enter
-  // perpendicular to the anchored side (vertical for top/bottom,
-  // horizontal for left/right).
-  const srcTangent = outwardNormal(srcRect, a);
-  const tgtTangent = outwardNormal(tgtRect, b);
-
   // For non-rectangular shapes (diamonds/hexagons), the bbox-based anchor
   // above lands OUTSIDE the actual outline. Snap it back onto the polygon.
   if (srcPoly) a = snapToPolygonOutline(srcPoly, a);
   if (tgtPoly) b = snapToPolygonOutline(tgtPoly, b);
+
+  // Outward normals for the endpoint tangents. For a rectangle, the
+  // side is derived from the bbox (cardinal). For a polygon (diamond,
+  // hexagon, trapezoid), the normal is perpendicular to the actual
+  // sloped face the anchor sits on — EXCEPT at "tip" vertices (mid-side
+  // of the bbox, e.g. the top point of a diamond), where the exit is
+  // forced to the cardinal direction of that bbox side.
+  const srcTangent = srcPoly ? polygonOutwardNormal(srcPoly, a) : outwardNormal(srcRect, a);
+  const tgtTangent = tgtPoly ? polygonOutwardNormal(tgtPoly, b) : outwardNormal(tgtRect, b);
 
   // Choose path shape based on line style.
   const style = lineStyle ?? 'curve';
