@@ -108,6 +108,36 @@ function num(el: Element, attr: string): number {
 }
 
 /**
+ * If the node group's shape child is a `<polygon>` (diamonds, hexagons,
+ * parallelograms, trapezoids, etc.), return its vertices in the SVG root's
+ * coordinate space. Returns `null` for rectangles/ellipses/circles — those
+ * shapes are already faithfully represented by their bbox, so anchor
+ * calculation against the bbox is exact.
+ *
+ * Why this exists: the `anchorOn` heuristic picks the mid-point of one of
+ * the bbox's four sides. For a diamond, the bbox's side mid-points sit
+ * OUTSIDE the actual outline (the diamond only touches its bbox at 4
+ * vertices). Callers use this list to snap the computed anchor onto the
+ * true polygon outline.
+ */
+export function groupPolygon(g: SVGGElement | Element): { x: number; y: number }[] | null {
+  const t = parseTranslate(g.getAttribute('transform'));
+  const shape = g.querySelector(SHAPE_SELECTOR);
+  if (!shape) return null;
+  if (shape.tagName !== 'polygon') return null;
+  const pointsAttr = shape.getAttribute('points');
+  if (!pointsAttr) return null;
+  const s = parseTranslate(shape.getAttribute('transform'));
+  const nums = pointsAttr.split(/[\s,]+/).map(Number).filter(Number.isFinite);
+  if (nums.length < 6) return null; // need at least 3 vertices
+  const out: { x: number; y: number }[] = [];
+  for (let i = 0; i < nums.length; i += 2) {
+    out.push({ x: t.x + s.x + nums[i], y: t.y + s.y + nums[i + 1] });
+  }
+  return out;
+}
+
+/**
  * Fallback box for a node group whose shape child couldn't be measured.
  * A 60x40 rect centered on the group's translate — matches Mermaid's
  * default node size closely enough for routing to remain sensible.

@@ -61,11 +61,46 @@ body {
   cursor: grabbing;
   filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.25));
 }
+/* Selection ring: uses outline-style box-shadow so it never overrides user
+   stroke/strokeWidth inline styles. We achieve a visible ring via a CSS
+   filter instead of changing stroke-width. */
 .mf-node--selected > rect,
 .mf-node--selected > polygon,
 .mf-node--selected > circle,
 .mf-node--selected > ellipse,
 .mf-node--selected > path {
-  stroke: var(--mf-accent) !important;
-  stroke-width: 2.5px !important;
+  stroke: var(--mf-accent);
+  stroke-width: 2.5px;
+}
+
+/* ── Edge interaction ─────────────────────────────────────────────────────── */
+
+/* The real edge path: keep pointer-events on the stroke only. */
+path[data-edge-id] {
+  cursor: pointer;
+  pointer-events: visibleStroke;
+}
+
+/* Wide transparent hit-area sibling injected by annotateEdges.
+   Sits on top of the visible path (inserted after it in DOM order).
+   pointer-events:stroke on a stroked path with a wide invisible stroke
+   gives a generous 20 px click zone around any line. */
+.mf-edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 20px;
+  cursor: pointer;
+  pointer-events: stroke;
+}
+
+.mf-edge--selected {
+  filter: drop-shadow(0 0 4px var(--mf-accent));
+}
+
+/* Edge labels must never intercept pointer events so the path beneath
+   (and waypoint handles above) are always reachable. */
+.mf-canvas g.edgeLabel,
+.mf-canvas g.edgeLabels,
+.mf-canvas .edgeLabel {
+  pointer-events: none;
 }

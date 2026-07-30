@@ -4,6 +4,8 @@
 import { Button } from '@/shared/components/Button';
 import { useUiStore, type Theme } from '@/stores/uiStore';
 import { useHistoryStore } from '@/stores/historyStore';
+import { useStyleStore } from '@/stores/styleStore';
+import { useDiagramStore } from '@/stores/diagramStore';
 import { serializeToFile } from '@/features/file-io/services/fileSerializer';
 import { downloadBlob } from '@/features/file-io/services/download';
 import { exportSvg } from '@/features/file-io/services/exportSvg';
@@ -17,6 +19,8 @@ export function Toolbar() {
   const pushToast = useUiStore((s) => s.pushToast);
   const undo = useHistoryStore((s) => s.undo);
   const redo = useHistoryStore((s) => s.redo);
+  const resetStyles = useStyleStore((s) => s.reset);
+  const clearPositionOverrides = useDiagramStore((s) => s.clearPositionOverrides);
 
   const cycleTheme = () => {
     const order: Theme[] = ['system', 'light', 'dark'];
@@ -54,6 +58,19 @@ export function Toolbar() {
     pushToast({ kind: 'success', message: 'Share URL copied to clipboard.' });
   };
 
+  /** Reset ALL style overrides, position overrides, AND edge waypoints back
+   * to the original Mermaid-rendered layout. This is the "nuke all
+   * customisations" button. */
+  const resetAll = () => {
+    useHistoryStore.getState().commit();
+    resetStyles();
+    clearPositionOverrides();
+    // Clear edge waypoints and anchor overrides via diagramStore directly.
+    useDiagramStore.getState().clearEdgeWaypoints();
+    useDiagramStore.getState().clearEdgeAnchorOverrides();
+    pushToast({ kind: 'success', message: 'All styles and positions reset.' });
+  };
+
   return (
     <header
       role="banner"
@@ -67,6 +84,7 @@ export function Toolbar() {
       <div className="flex items-center gap-1">
         <Button onClick={undo} title="Undo (⌘Z)">Undo</Button>
         <Button onClick={redo} title="Redo (⌘⇧Z)">Redo</Button>
+        <Button onClick={resetAll} title="Reset all style and position overrides back to Mermaid defaults">↺ Reset All</Button>
         <span className="mx-1 h-5 w-px bg-border" />
         <Button onClick={save} title="Save (⌘S)">Save</Button>
         <Button onClick={doExportSvg}>Export SVG</Button>

@@ -16,6 +16,7 @@
  */
 import { useEffect } from 'react';
 import { useDiagramStore } from '@/stores/diagramStore';
+import { useStyleStore } from '@/stores/styleStore';
 import { useSelectionStore } from '@/stores/selectionStore';
 import { useHistoryStore } from '@/stores/historyStore';
 import { useUiStore } from '@/stores/uiStore';
@@ -104,7 +105,19 @@ export function useNodeDrag(svgHostRef: React.RefObject<HTMLElement>) {
 
       // Route every edge every frame — cheap for typical diagrams and
       // guarantees adjacent edges (even for non-dragged nodes) stay hooked up.
-      routeAllEdges(ctx.svg);
+      // Pass current store state so line-style / waypoint / anchor overrides are respected.
+      const { edgeWaypoints, edgeAnchorOverrides } = useDiagramStore.getState();
+      const edgeStyles = useStyleStore.getState().edgeStyles;
+      const lineStyles = new Map(
+        Object.entries(edgeStyles)
+          .filter(([, s]) => s.lineStyle)
+          .map(([id, s]) => [id, s.lineStyle!] as const),
+      );
+      routeAllEdges(ctx.svg, {
+        lineStyles,
+        waypoints: new Map(Object.entries(edgeWaypoints)),
+        anchorOverrides: new Map(Object.entries(edgeAnchorOverrides)),
+      });
       expandViewBoxToFit(ctx.svg);
     };
 

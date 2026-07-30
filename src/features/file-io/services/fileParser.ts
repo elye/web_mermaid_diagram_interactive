@@ -19,7 +19,8 @@ export function loadFromText(text: string, filename?: string): ParseResult {
   if (ext === 'mermaidflow' || looksJson) {
     try {
       const parsed = JSON.parse(text) as MermaidFlowFile;
-      if (parsed.version !== '1.0' || typeof parsed.mermaidSource !== 'string') {
+      const supported = parsed.version === '1.0' || parsed.version === '1.1';
+      if (!supported || typeof parsed.mermaidSource !== 'string') {
         return { kind: 'unknown', ok: false, error: 'Unsupported .mermaidflow version.' };
       }
       hydrateFromFile(parsed);
@@ -43,13 +44,18 @@ export function loadFromText(text: string, filename?: string): ParseResult {
 }
 
 export function hydrateFromFile(file: MermaidFlowFile): void {
+  // v1.1 adds edgeStyles / edgeWaypoints / edgeAnchorOverrides.
+  // v1.0 files simply omit them → treated as empty maps.
+  const isV11 = file.version === '1.1';
   useDiagramStore.getState().hydrate({
     source: file.mermaidSource,
     positionOverrides: file.positionOverrides ?? {},
+    edgeWaypoints: isV11 ? file.edgeWaypoints ?? {} : {},
+    edgeAnchorOverrides: isV11 ? file.edgeAnchorOverrides ?? {} : {},
   });
   useStyleStore.getState().hydrate({
     nodeStyles: file.styleOverrides ?? {},
-    edgeStyles: {},
+    edgeStyles: isV11 ? file.edgeStyles ?? {} : {},
     annotations: file.annotations ?? [],
   });
   if (file.viewportState) {

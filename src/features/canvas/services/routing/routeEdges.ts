@@ -9,28 +9,51 @@
  *        b. If either is missing, run geometry-based inference against
  *           the current path endpoints and cache the result on the path.
  *        c. If source === target, emit a self-loop.
- *        d. Otherwise, anchor to closest sides and emit a bezier.
+ *        d. Otherwise, anchor to closest sides and emit the appropriate
+ *           path shape (curve / straight / orthogonal) based on per-edge
+ *           line-style and optional waypoints.
  *   3. Re-position edge labels to sit near the new midpoint of each path.
  *
  * The router does NOT read `getBBox()` or call `getTotalLength()` on the
  * critical path — it uses static-attribute helpers from `../svg/*` so it
  * stays fast and jsdom-compatible.
  */
-import type { BBox } from '@/shared/types/diagram';
-import { groupBBox, fallbackBBox, pathEndpoints, pathMidpoint } from '../svg';
-import { anchorOn, centerOf } from './anchors';
-import { bezierPath, selfLoopPath } from './paths';
+import type { BBox, Point, EdgeLineStyle, EdgeWaypoint, EdgeAnchorOverride } from '@/shared/types/diagram';
+import { groupBBox, groupPolygon, fallbackBBox, pathEndpoints, pathMidpoint } from '../svg';
+import { anchorOn, anchorOnSide, centerOf, outwardNormal, polygonOutwardNormal, snapToPolygonOutline } from './anchors';
+import { bezierPath, straightPath, orthogonalPath } from './paths';
+import { waypointBezierPath } from './bezierChain';
+import { selfLoopPath } from './selfLoop';
 import { nearestNodeId } from './endpointInference';
+
+export interface RouteOptions {
+  /** Per-edge line style overrides: edgeId → style */
+  lineStyles?: ReadonlyMap<string, EdgeLineStyle>;
+  /** Per-edge user waypoints: edgeId → list of waypoints */
+  waypoints?: ReadonlyMap<string, EdgeWaypoint[]>;
+  /**
+   * Per-edge anchor overrides: edgeId → { source?, target? }
+   * When provided, the auto-computed anchor side is replaced by the
+   * user-pinned side + offset.
+   */
+  anchorOverrides?: ReadonlyMap<string, { source?: EdgeAnchorOverride; target?: EdgeAnchorOverride }>;
+}
 
 /**
  * Public entry point. Called after every render and every drag frame.
+ * `options` may carry per-edge line style and waypoint data from the stores.
  */
-export function routeAllEdges(svg: SVGSVGElement): void {
+export function routeAllEdges(svg: SVGSVGElement, options: RouteOptions = {}): void {
   const rects = collectNodeRects(svg);
+  const polygons = collectNodePolygons(svg);
   if (rects.size === 0) return;
 
   svg.querySelectorAll<SVGPathElement>('path[data-edge-id]').forEach((path) => {
-    routeSingleEdge(path, rects);
+    const id = path.getAttribute('data-edge-id') ?? '';
+    const lineStyle = options.lineStyles?.get(id);
+    const waypts = options.waypoints?.get(id);
+    const anchorOverride = options.anchorOverrides?.get(id);
+    routeSingleEdge(path, rects, polygons, lineStyle, waypts, anchorOverride);
   });
 
   repositionEdgeLabels(svg);
@@ -58,9 +81,29 @@ function collectNodeRects(svg: SVGSVGElement): Map<string, BBox> {
   return out;
 }
 
+/**
+ * Collect polygon vertex lists for nodes whose shape is a `<polygon>`
+ * (diamonds, hexagons, trapezoids). Rectangles/circles/ellipses are
+ * omitted — their bbox already matches their outline exactly.
+ */
+function collectNodePolygons(svg: SVGSVGElement): Map<string, Point[]> {
+  const out = new Map<string, Point[]>();
+  svg.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
+    const id = g.getAttribute('data-node-id');
+    if (!id) return;
+    const poly = groupPolygon(g);
+    if (poly) out.set(id, poly);
+  });
+  return out;
+}
+
 function routeSingleEdge(
   path: SVGPathElement,
   rects: ReadonlyMap<string, BBox>,
+  polygons: ReadonlyMap<string, Point[]>,
+  lineStyle: EdgeLineStyle | undefined,
+  waypoints: EdgeWaypoint[] | undefined,
+  anchorOverride?: { source?: EdgeAnchorOverride; target?: EdgeAnchorOverride },
 ): void {
   let src = path.getAttribute('data-edge-source');
   let tgt = path.getAttribute('data-edge-target');
@@ -81,14 +124,85 @@ function routeSingleEdge(
   if (!srcRect || !tgtRect) return;
 
   // Self-loop: draw a small kidney on the right side of the node.
+  // Honour any user waypoint so the loop can be reshaped by drag.
   if (src && tgt && src === tgt) {
-    path.setAttribute('d', selfLoopPath(srcRect));
+    const labelWidth = measureEdgeLabelWidth(path);
+    const loopD = selfLoopPath(srcRect, waypoints?.[0], labelWidth);
+    path.setAttribute('d', loopD);
+    // Keep hit-area in sync.
+    const edgeIdSelf = path.getAttribute('data-edge-id');
+    if (edgeIdSelf) {
+      const escapedSelf = edgeIdSelf.replace(/["\\]/g, '\\$&');
+      const hitSelf = path.parentElement?.querySelector<SVGPathElement>(
+        `.mf-edge-hit[data-hit-edge-id="${escapedSelf}"]`,
+      );
+      if (hitSelf) hitSelf.setAttribute('d', loopD);
+    }
     return;
   }
 
-  const a = anchorOn(srcRect, centerOf(tgtRect));
-  const b = anchorOn(tgtRect, centerOf(srcRect));
-  path.setAttribute('d', bezierPath(a, b));
+  // Resolve anchor points: use override if provided, else compute from geometry.
+  const srcPoly = src ? polygons.get(src) : undefined;
+  const tgtPoly = tgt ? polygons.get(tgt) : undefined;
+
+  // Default-anchor direction: when the edge has waypoints, the anchor
+  // should face the FIRST/LAST waypoint (that's the actual direction
+  // the arrow travels immediately after leaving the node). Without
+  // waypoints, fall back to facing the opposite node's center.
+  const srcFacing = waypoints && waypoints.length > 0 ? waypoints[0] : centerOf(tgtRect);
+  const tgtFacing =
+    waypoints && waypoints.length > 0
+      ? waypoints[waypoints.length - 1]
+      : centerOf(srcRect);
+
+  let a = anchorOverride?.source
+    ? anchorOnSide(srcRect, anchorOverride.source)
+    : anchorOn(srcRect, srcFacing);
+  let b = anchorOverride?.target
+    ? anchorOnSide(tgtRect, anchorOverride.target)
+    : anchorOn(tgtRect, tgtFacing);
+
+  // For non-rectangular shapes (diamonds/hexagons), the bbox-based anchor
+  // above lands OUTSIDE the actual outline. Snap it back onto the polygon.
+  if (srcPoly) a = snapToPolygonOutline(srcPoly, a);
+  if (tgtPoly) b = snapToPolygonOutline(tgtPoly, b);
+
+  // Outward normals for the endpoint tangents. For a rectangle, the
+  // side is derived from the bbox (cardinal). For a polygon (diamond,
+  // hexagon, trapezoid), the normal is perpendicular to the actual
+  // sloped face the anchor sits on — EXCEPT at "tip" vertices (mid-side
+  // of the bbox, e.g. the top point of a diamond), where the exit is
+  // forced to the cardinal direction of that bbox side.
+  const srcTangent = srcPoly ? polygonOutwardNormal(srcPoly, a) : outwardNormal(srcRect, a);
+  const tgtTangent = tgtPoly ? polygonOutwardNormal(tgtPoly, b) : outwardNormal(tgtRect, b);
+
+  // Choose path shape based on line style.
+  const style = lineStyle ?? 'curve';
+  let d: string;
+  if (style === 'straight') {
+    d = straightPath(a, b);
+  } else if (style === 'orthogonal') {
+    d = orthogonalPath(a, b);
+  } else {
+    // 'curve' — anchor-aware cubic Bezier through all waypoints if any,
+    // else standard S-curve bezier.
+    if (waypoints && waypoints.length > 0) {
+      d = waypointBezierPath(a, waypoints, b, srcRect, tgtRect, srcTangent, tgtTangent);
+    } else {
+      d = bezierPath(a, b, srcTangent, tgtTangent);
+    }
+  }
+  path.setAttribute('d', d);
+
+  // Keep the wide transparent hit-area sibling in sync.
+  const edgeId = path.getAttribute('data-edge-id');
+  if (edgeId) {
+    const escaped = edgeId.replace(/["\\]/g, '\\$&');
+    const hit = path.parentElement?.querySelector<SVGPathElement>(
+      `.mf-edge-hit[data-hit-edge-id="${escaped}"]`,
+    );
+    if (hit) hit.setAttribute('d', d);
+  }
 }
 
 function inferEndpoints(
@@ -127,4 +241,35 @@ function repositionEdgeLabels(svg: SVGSVGElement): void {
 
 function cssEscape(v: string): string {
   return v.replace(/["\\]/g, '\\$&');
+}
+
+/**
+ * Approximate width of an edge's label in SVG user units. Returns 0 if
+ * the edge has no label. Uses `getBBox()` when available (real browser)
+ * and falls back to a character-count heuristic for jsdom / tests.
+ *
+ * Kept lightweight — called on every route pass for every self-loop.
+ */
+function measureEdgeLabelWidth(path: SVGPathElement): number {
+  const id = path.getAttribute('data-edge-id');
+  if (!id) return 0;
+  const svg = path.ownerSVGElement;
+  if (!svg) return 0;
+  const label = svg.querySelector<SVGGElement>(
+    `g.edgeLabel[data-edge-id="${cssEscape(id)}"]`,
+  );
+  if (!label) return 0;
+  const text = (label.textContent ?? '').trim();
+  if (!text) return 0;
+
+  // Prefer the real rendered width when the DOM API is available.
+  try {
+    const bb = label.getBBox();
+    if (bb.width > 0) return bb.width;
+  } catch {
+    // getBBox() throws in jsdom on unlaid-out elements — fall through.
+  }
+  // Heuristic fallback: ~7px per character. Good enough for tests and
+  // for the initial paint before Mermaid has laid the label out.
+  return text.length * 7;
 }

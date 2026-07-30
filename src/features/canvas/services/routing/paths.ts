@@ -1,46 +1,73 @@
 /**
- * Path shape emitters — pure functions from geometry to SVG `d` strings.
- * Kept UI-agnostic: routers may pick between these based on edge topology.
+ * Base path shape emitters — pure functions from geometry to SVG `d`
+ * strings. UI-agnostic; the router picks between them based on the edge's
+ * `EdgeLineStyle` and topology.
+ *
+ * This module owns the primitives (`bezierPath`, `straightPath`,
+ * `orthogonalPath`). Multi-waypoint chains live in `./bezierChain` and
+ * self-loops in `./selfLoop`.
  */
-import type { BBox, Point } from '@/shared/types/diagram';
+import type { Point } from '@/shared/types/diagram';
+import { bendFor, fmt } from './pathFormat';
 
 /**
- * Smooth cubic bezier between two anchor points. Control points are
- * offset in the "outgoing" direction of the anchor to produce clean
- * S-curves for L→R / T→B / diagonal edges alike.
+ * Smooth cubic Bézier between two anchor points.
  *
- * The bend distance is proportional to the endpoint separation but
- * clamped to [30, 120] so short edges don't look sharp and long edges
- * don't overshoot.
+ * Control-arm length is proportional to endpoint separation, clamped to
+ * a comfortable band by `bendFor`.
+ *
+ * Optional `srcTangent` / `tgtTangent` are unit outward normals that
+ * override the axis-picking heuristic. Supplying them makes the curve
+ * leave/enter perpendicular to the anchored side regardless of neighbour
+ * position (top/bottom → vertical exit; left/right → horizontal exit).
  */
-export function bezierPath(a: Point, b: Point): string {
+export function bezierPath(
+  a: Point,
+  b: Point,
+  srcTangent?: Point,
+  tgtTangent?: Point,
+): string {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
+  const bend = bendFor(dx, dy);
+
   const horizontal = Math.abs(dx) >= Math.abs(dy);
-  const bend = Math.max(30, Math.min(120, Math.hypot(dx, dy) * 0.4));
-  const c1: Point = horizontal
-    ? { x: a.x + Math.sign(dx) * bend, y: a.y }
-    : { x: a.x, y: a.y + Math.sign(dy) * bend };
-  const c2: Point = horizontal
-    ? { x: b.x - Math.sign(dx) * bend, y: b.y }
-    : { x: b.x, y: b.y - Math.sign(dy) * bend };
-  return `M ${a.x} ${a.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${b.x} ${b.y}`;
+  const srcT: Point =
+    srcTangent ??
+    (horizontal
+      ? { x: Math.sign(dx) || 1, y: 0 }
+      : { x: 0, y: Math.sign(dy) || 1 });
+  const tgtT: Point =
+    tgtTangent ??
+    (horizontal
+      ? { x: -(Math.sign(dx) || 1), y: 0 }
+      : { x: 0, y: -(Math.sign(dy) || 1) });
+
+  const c1: Point = { x: a.x + srcT.x * bend, y: a.y + srcT.y * bend };
+  const c2: Point = { x: b.x + tgtT.x * bend, y: b.y + tgtT.y * bend };
+  return `M ${fmt(a.x)} ${fmt(a.y)} C ${fmt(c1.x)} ${fmt(c1.y)}, ${fmt(c2.x)} ${fmt(c2.y)}, ${fmt(b.x)} ${fmt(b.y)}`;
+}
+
+/** Straight line from `a` to `b`. */
+export function straightPath(a: Point, b: Point): string {
+  return `M ${fmt(a.x)} ${fmt(a.y)} L ${fmt(b.x)} ${fmt(b.y)}`;
 }
 
 /**
- * Kidney-shaped self-loop anchored on the RIGHT side of the given rect.
- * Used for edges whose source and target are the same node (`D --> D`).
+ * Orthogonal (right-angle) path from `a` to `b` — single elbow chosen
+ * to match the dominant movement axis, so the exit direction agrees
+ * with `bezierPath`'s default.
  *
- * The loop starts slightly above the right midpoint, swings out by
- * `~0.7 * rect.height` (clamped to [20, 40]), and comes back slightly
- * below. Always attached to the rect so it stays glued during drags.
+ *   horizontal-first (|dx| ≥ |dy|):   a → (mid-x, a.y) → (mid-x, b.y) → b
+ *   vertical-first   (|dy| >  |dx|):  a → (a.x, mid-y) → (b.x, mid-y) → b
  */
-export function selfLoopPath(rect: BBox): string {
-  const cy = rect.y + rect.height / 2;
-  const rightX = rect.x + rect.width;
-  const size = Math.max(20, Math.min(40, rect.height * 0.7));
-  const start: Point = { x: rightX, y: cy - size * 0.25 };
-  const end: Point = { x: rightX, y: cy + size * 0.25 };
-  const outX = rightX + size;
-  return `M ${start.x} ${start.y} C ${outX} ${cy - size}, ${outX} ${cy + size}, ${end.x} ${end.y}`;
+export function orthogonalPath(a: Point, b: Point): string {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    const midX = (a.x + b.x) / 2;
+    return `M ${fmt(a.x)} ${fmt(a.y)} L ${fmt(midX)} ${fmt(a.y)} L ${fmt(midX)} ${fmt(b.y)} L ${fmt(b.x)} ${fmt(b.y)}`;
+  }
+  const midY = (a.y + b.y) / 2;
+  return `M ${fmt(a.x)} ${fmt(a.y)} L ${fmt(a.x)} ${fmt(midY)} L ${fmt(b.x)} ${fmt(midY)} L ${fmt(b.x)} ${fmt(b.y)}`;
 }
