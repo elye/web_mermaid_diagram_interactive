@@ -131,6 +131,61 @@ describe('edgeRouter', () => {
     expect(endY).toBeLessThanOrEqual(473);
   });
 
+  /**
+   * Regression: when the user drags the source/target anchor to a spot on
+   * the node's bounding box, the endpoint must be snapped onto the actual
+   * polygon outline for non-rectangular shapes (diamond, hexagon, …).
+   * Without this snap, an override that puts the anchor at, say, the top
+   * of the diamond's bbox lands OUTSIDE the diamond (empty space to the
+   * upper-left/right of the top vertex).
+   */
+  it('anchor override on a diamond snaps to the polygon outline (not bbox)', () => {
+    const svg = loadSvg(`
+      <svg xmlns="http://www.w3.org/2000/svg">
+        <g class="nodes">
+          <g class="node" id="flowchart-A-0" transform="translate(500, 20)">
+            <rect x="-25" y="-19" width="50" height="39"/>
+          </g>
+          <!-- Diamond centred at (500, 300) with 4 vertices in bbox 427..573 × 227..373. -->
+          <g class="node" id="flowchart-B-1" transform="translate(500, 300)">
+            <polygon transform="translate(-73, 73)"
+                     points="73,0 147,-73 73,-147 0,-73"/>
+          </g>
+        </g>
+        <g class="edgePaths">
+          <path class="edge" id="L-A-B-0"
+                data-edge-source="A" data-edge-target="B"
+                d="M 500 39 L 500 227"/>
+        </g>
+      </svg>`);
+
+    // Pin the target anchor at the top-right of B's bbox (top side, offset=0.9).
+    // Without polygon snapping, the endpoint would sit at (500 + 0.4*147, 227)
+    // = (~558.8, 227) — well OUTSIDE the diamond outline. With snapping, it
+    // must land on the diamond's top-right edge (from top vertex (500,227) to
+    // right vertex (573, 300)).
+    routeAllEdges(svg, {
+      anchorOverrides: new Map([
+        ['L-A-B-0', { target: { side: 'top', offset: 0.9 } }],
+      ]),
+    });
+    const d = svg.querySelector<SVGPathElement>('path[data-edge-id="L-A-B-0"]')!.getAttribute('d')!;
+    const match = / (-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)$/.exec(d)!;
+    const endX = Number(match[1]);
+    const endY = Number(match[2]);
+    // Diamond vertices in root coords: top (500,226), right (574,300),
+    // bottom (500,373), left (427,300). The top-right edge is 45°
+    // (direction (74, 74)) so any point on it satisfies:
+    //   (endX - 500) === (endY - 226)
+    const residual = Math.abs((endX - 500) - (endY - 226));
+    expect(residual).toBeLessThan(0.5);
+    // And it must land somewhere along the segment (not past a vertex).
+    expect(endX).toBeGreaterThanOrEqual(500 - 0.5);
+    expect(endX).toBeLessThanOrEqual(574 + 0.5);
+    expect(endY).toBeGreaterThanOrEqual(226 - 0.5);
+    expect(endY).toBeLessThanOrEqual(300 + 0.5);
+  });
+
   it('routeAllEdges reconnects paths to node sides after a node moves', () => {
     const svg = loadSvg(SVG);
     const b = svg.querySelector<SVGGElement>('g[data-node-id="B"]')!;

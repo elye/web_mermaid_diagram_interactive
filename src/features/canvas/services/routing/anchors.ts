@@ -87,3 +87,44 @@ function clamp01(v: number): number {
 export function centerOf(rect: BBox): Point {
   return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
 }
+
+/**
+ * Project `p` onto the closest point of the closed polygon defined by
+ * `poly` (vertices in order, edges implicitly connect `poly[i]→poly[i+1]`
+ * and wrap `poly[last]→poly[0]`).
+ *
+ * Used to snap a computed anchor point onto the ACTUAL outline of a
+ * non-rectangular node (diamond, hexagon, trapezoid) — the bbox-based
+ * `anchorOn` places the anchor at the mid-point of a bbox side, which for
+ * these shapes falls outside the shape's own outline.
+ *
+ * O(n) in vertex count. n is typically 4 (diamond) or 6 (hexagon).
+ */
+export function snapToPolygonOutline(poly: Point[], p: Point): Point {
+  if (poly.length < 2) return p;
+  let bestX = p.x;
+  let bestY = p.y;
+  let bestD2 = Infinity;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    const ex = b.x - a.x;
+    const ey = b.y - a.y;
+    const len2 = ex * ex + ey * ey;
+    if (len2 === 0) continue;
+    // Projection parameter t of p onto segment a→b, clamped to [0,1].
+    let t = ((p.x - a.x) * ex + (p.y - a.y) * ey) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const qx = a.x + t * ex;
+    const qy = a.y + t * ey;
+    const dx = p.x - qx;
+    const dy = p.y - qy;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      bestX = qx;
+      bestY = qy;
+    }
+  }
+  return { x: bestX, y: bestY };
+}

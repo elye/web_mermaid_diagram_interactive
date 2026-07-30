@@ -18,9 +18,9 @@
  * critical path — it uses static-attribute helpers from `../svg/*` so it
  * stays fast and jsdom-compatible.
  */
-import type { BBox, EdgeLineStyle, EdgeWaypoint, EdgeAnchorOverride } from '@/shared/types/diagram';
-import { groupBBox, fallbackBBox, pathEndpoints, pathMidpoint } from '../svg';
-import { anchorOn, anchorOnSide, centerOf } from './anchors';
+import type { BBox, Point, EdgeLineStyle, EdgeWaypoint, EdgeAnchorOverride } from '@/shared/types/diagram';
+import { groupBBox, groupPolygon, fallbackBBox, pathEndpoints, pathMidpoint } from '../svg';
+import { anchorOn, anchorOnSide, centerOf, snapToPolygonOutline } from './anchors';
 import { bezierPath, straightPath, orthogonalPath, waypointBezierPath, selfLoopPath } from './paths';
 import { nearestNodeId } from './endpointInference';
 
@@ -43,6 +43,7 @@ export interface RouteOptions {
  */
 export function routeAllEdges(svg: SVGSVGElement, options: RouteOptions = {}): void {
   const rects = collectNodeRects(svg);
+  const polygons = collectNodePolygons(svg);
   if (rects.size === 0) return;
 
   svg.querySelectorAll<SVGPathElement>('path[data-edge-id]').forEach((path) => {
@@ -50,7 +51,7 @@ export function routeAllEdges(svg: SVGSVGElement, options: RouteOptions = {}): v
     const lineStyle = options.lineStyles?.get(id);
     const waypts = options.waypoints?.get(id);
     const anchorOverride = options.anchorOverrides?.get(id);
-    routeSingleEdge(path, rects, lineStyle, waypts, anchorOverride);
+    routeSingleEdge(path, rects, polygons, lineStyle, waypts, anchorOverride);
   });
 
   repositionEdgeLabels(svg);
@@ -78,9 +79,26 @@ function collectNodeRects(svg: SVGSVGElement): Map<string, BBox> {
   return out;
 }
 
+/**
+ * Collect polygon vertex lists for nodes whose shape is a `<polygon>`
+ * (diamonds, hexagons, trapezoids). Rectangles/circles/ellipses are
+ * omitted — their bbox already matches their outline exactly.
+ */
+function collectNodePolygons(svg: SVGSVGElement): Map<string, Point[]> {
+  const out = new Map<string, Point[]>();
+  svg.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
+    const id = g.getAttribute('data-node-id');
+    if (!id) return;
+    const poly = groupPolygon(g);
+    if (poly) out.set(id, poly);
+  });
+  return out;
+}
+
 function routeSingleEdge(
   path: SVGPathElement,
   rects: ReadonlyMap<string, BBox>,
+  polygons: ReadonlyMap<string, Point[]>,
   lineStyle: EdgeLineStyle | undefined,
   waypoints: EdgeWaypoint[] | undefined,
   anchorOverride?: { source?: EdgeAnchorOverride; target?: EdgeAnchorOverride },
@@ -121,12 +139,20 @@ function routeSingleEdge(
   }
 
   // Resolve anchor points: use override if provided, else compute from geometry.
-  const a = anchorOverride?.source
+  const srcPoly = src ? polygons.get(src) : undefined;
+  const tgtPoly = tgt ? polygons.get(tgt) : undefined;
+
+  let a = anchorOverride?.source
     ? anchorOnSide(srcRect, anchorOverride.source)
     : anchorOn(srcRect, centerOf(tgtRect));
-  const b = anchorOverride?.target
+  let b = anchorOverride?.target
     ? anchorOnSide(tgtRect, anchorOverride.target)
     : anchorOn(tgtRect, centerOf(srcRect));
+
+  // For non-rectangular shapes (diamonds/hexagons), the bbox-based anchor
+  // above lands OUTSIDE the actual outline. Snap it back onto the polygon.
+  if (srcPoly) a = snapToPolygonOutline(srcPoly, a);
+  if (tgtPoly) b = snapToPolygonOutline(tgtPoly, b);
 
   // Choose path shape based on line style.
   const style = lineStyle ?? 'curve';

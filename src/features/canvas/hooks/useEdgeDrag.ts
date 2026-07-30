@@ -38,8 +38,8 @@ import { useDiagramStore } from '@/stores/diagramStore';
 import { useStyleStore } from '@/stores/styleStore';
 import { useSelectionStore } from '@/stores/selectionStore';
 import { routeAllEdges, expandViewBoxToFit } from '../services/edgeRouter';
-import { pathMidpoint, groupBBox } from '../services/svg';
-import { anchorOn, anchorOnSide, centerOf, snapToPerimeter } from '../services/routing/anchors';
+import { pathMidpoint, groupBBox, groupPolygon } from '../services/svg';
+import { anchorOn, anchorOnSide, centerOf, snapToPerimeter, snapToPolygonOutline } from '../services/routing/anchors';
 import type { EdgeLineStyle, BBox, Point } from '@/shared/types/diagram';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -169,10 +169,15 @@ export function useEdgeDrag(svgHostRef: React.RefObject<HTMLElement>, deps?: unk
         const { edgeId, role, nodeId } = dragCtx;
         const nodeG = svgEl.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nodeId)}"]`);
         const rect = nodeG ? groupBBox(nodeG) : null;
-        if (rect) {
+        if (rect && nodeG) {
           const anchorOverride = snapToPerimeter(rect, { x: pt.x, y: pt.y });
           // Compute the snapped point for handle visual feedback.
-          const snapped = anchorOnSide(rect, anchorOverride);
+          let snapped = anchorOnSide(rect, anchorOverride);
+          // For non-rectangular shapes (diamond, hexagon), the bbox side
+          // midpoint sits outside the actual outline — snap the visual
+          // handle onto the polygon so the dot stays glued to the shape.
+          const poly = groupPolygon(nodeG);
+          if (poly) snapped = snapToPolygonOutline(poly, snapped);
           handle.setAttribute('cx', String(snapped.x));
           handle.setAttribute('cy', String(snapped.y));
 
@@ -321,12 +326,15 @@ function injectEdgeHandles(host: HTMLElement): void {
     if (srcId) {
       const srcG = svgEl.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(srcId)}"]`);
       const srcRect = srcG ? groupBBox(srcG) : null;
-      if (srcRect) {
+      if (srcRect && srcG) {
         // Compute current anchor position.
         const override = anchors.source;
-        const srcAnchor = override
+        let srcAnchor = override
           ? anchorOnSide(srcRect, override)
           : computeDefaultAnchor(srcRect, svgEl, tgtId);
+        // Snap onto the actual polygon outline (diamond/hexagon).
+        const srcPoly = groupPolygon(srcG);
+        if (srcAnchor && srcPoly) srcAnchor = snapToPolygonOutline(srcPoly, srcAnchor);
         if (srcAnchor) {
           g.appendChild(makeAnchorHandle(id, srcAnchor.x, srcAnchor.y, 'source', srcId));
         }
@@ -336,11 +344,13 @@ function injectEdgeHandles(host: HTMLElement): void {
     if (tgtId) {
       const tgtG = svgEl.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(tgtId)}"]`);
       const tgtRect = tgtG ? groupBBox(tgtG) : null;
-      if (tgtRect) {
+      if (tgtRect && tgtG) {
         const override = anchors.target;
-        const tgtAnchor = override
+        let tgtAnchor = override
           ? anchorOnSide(tgtRect, override)
           : computeDefaultAnchor(tgtRect, svgEl, srcId);
+        const tgtPoly = groupPolygon(tgtG);
+        if (tgtAnchor && tgtPoly) tgtAnchor = snapToPolygonOutline(tgtPoly, tgtAnchor);
         if (tgtAnchor) {
           g.appendChild(makeAnchorHandle(id, tgtAnchor.x, tgtAnchor.y, 'target', tgtId));
         }
