@@ -89,6 +89,30 @@ export function centerOf(rect: BBox): Point {
 }
 
 /**
+ * Outward unit normal at `p` given that `p` sits on (or near) the
+ * perimeter of `rect`. Determines which side of the bbox `p` is closest
+ * to and returns the corresponding cardinal direction:
+ *
+ *   top    → (0, -1)   bottom → (0, +1)
+ *   left   → (-1, 0)   right  → (+1, 0)
+ *
+ * Used by the router to force the bezier curve to exit an anchor
+ * perpendicular to its side, so top/bottom anchors curve vertically and
+ * side anchors curve horizontally regardless of neighbor position.
+ */
+export function outwardNormal(rect: BBox, p: Point): Point {
+  const distTop = Math.abs(p.y - rect.y);
+  const distBottom = Math.abs(p.y - (rect.y + rect.height));
+  const distLeft = Math.abs(p.x - rect.x);
+  const distRight = Math.abs(p.x - (rect.x + rect.width));
+  const min = Math.min(distTop, distBottom, distLeft, distRight);
+  if (min === distTop) return { x: 0, y: -1 };
+  if (min === distBottom) return { x: 0, y: 1 };
+  if (min === distLeft) return { x: -1, y: 0 };
+  return { x: 1, y: 0 };
+}
+
+/**
  * Project `p` onto the closest point of the closed polygon defined by
  * `poly` (vertices in order, edges implicitly connect `poly[i]→poly[i+1]`
  * and wrap `poly[last]→poly[0]`).

@@ -19,18 +19,43 @@ import type { BBox, Point } from '@/shared/types/diagram';
  * The bend distance is proportional to the endpoint separation but
  * clamped to [30, 120] so short edges don't look sharp and long edges
  * don't overshoot.
+ *
+ * Optional `srcTangent` / `tgtTangent` are unit outward normals — the
+ * direction the curve should exit `a` (respectively, the direction from
+ * `b` pointing back toward the incoming curve). When supplied, they
+ * override the axis-picking heuristic so the curve always leaves/enters
+ * perpendicular to the anchored side (top/bottom → vertical exit,
+ * left/right → horizontal exit).
  */
-export function bezierPath(a: Point, b: Point): string {
+export function bezierPath(
+  a: Point,
+  b: Point,
+  srcTangent?: Point,
+  tgtTangent?: Point,
+): string {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
-  const horizontal = Math.abs(dx) >= Math.abs(dy);
   const bend = Math.max(30, Math.min(120, Math.hypot(dx, dy) * 0.4));
-  const c1: Point = horizontal
-    ? { x: a.x + Math.sign(dx) * bend, y: a.y }
-    : { x: a.x, y: a.y + Math.sign(dy) * bend };
-  const c2: Point = horizontal
-    ? { x: b.x - Math.sign(dx) * bend, y: b.y }
-    : { x: b.x, y: b.y - Math.sign(dy) * bend };
+
+  // Endpoint tangents:
+  //   src → outward direction the curve leaves `a`.
+  //   tgt → outward direction from `b` toward the incoming curve.
+  // If not provided, fall back to the axis-dominance heuristic (matches
+  // legacy behavior and looks reasonable for plain rectangles).
+  const horizontal = Math.abs(dx) >= Math.abs(dy);
+  const srcT: Point =
+    srcTangent ??
+    (horizontal
+      ? { x: Math.sign(dx) || 1, y: 0 }
+      : { x: 0, y: Math.sign(dy) || 1 });
+  const tgtT: Point =
+    tgtTangent ??
+    (horizontal
+      ? { x: -(Math.sign(dx) || 1), y: 0 }
+      : { x: 0, y: -(Math.sign(dy) || 1) });
+
+  const c1: Point = { x: a.x + srcT.x * bend, y: a.y + srcT.y * bend };
+  const c2: Point = { x: b.x + tgtT.x * bend, y: b.y + tgtT.y * bend };
   return `M ${a.x} ${a.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${b.x} ${b.y}`;
 }
 
@@ -171,9 +196,11 @@ export function waypointBezierPath(
   _srcRect: BBox,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _tgtRect: BBox,
+  srcTangent?: Point,
+  tgtTangent?: Point,
 ): string {
-  if (waypoints.length === 0) return bezierPath(a, b);
-  return chainedBezierPath(a, waypoints, b);
+  if (waypoints.length === 0) return bezierPath(a, b, srcTangent, tgtTangent);
+  return chainedBezierPath(a, waypoints, b, srcTangent, tgtTangent);
 }
 
 /**
@@ -199,7 +226,13 @@ export function waypointBezierPath(
  *
  * For the trivial 0-waypoint case, this reduces to exactly `bezierPath`.
  */
-function chainedBezierPath(src: Point, waypoints: Point[], tgt: Point): string {
+function chainedBezierPath(
+  src: Point,
+  waypoints: Point[],
+  tgt: Point,
+  srcTangent?: Point,
+  tgtTangent?: Point,
+): string {
   const knots: Point[] = [src, ...waypoints, tgt];
   const n = knots.length;
 
@@ -217,11 +250,12 @@ function chainedBezierPath(src: Point, waypoints: Point[], tgt: Point): string {
     tan[i] = { x: dx / len, y: dy / len };
   }
 
-  // Endpoint tangents: reuse `bezierPath`'s axis-aware direction so the
-  // first/last halves preserve the initial-line look (horizontal S-curve
-  // for wide edges, vertical S-curve for tall edges).
-  tan[0] = anchorTangent(knots[0], knots[1]);
-  tan[n - 1] = anchorTangent(knots[n - 1], knots[n - 2]);
+  // Endpoint tangents: prefer the router-supplied outward normals (which
+  // encode the ACTUAL anchor side — top/bottom → vertical exit, left/
+  // right → horizontal exit). Fall back to `bezierPath`'s axis-aware
+  // heuristic when no side hint is available.
+  tan[0] = srcTangent ?? anchorTangent(knots[0], knots[1]);
+  tan[n - 1] = tgtTangent ?? anchorTangent(knots[n - 1], knots[n - 2]);
   // Note: the last tangent points FROM tgt TO its previous knot; we
   // want the outgoing direction leaving `tgt` backwards, so flip it so
   // that cp2 = tgt − T[n-1]·bend lands in front of tgt (toward prev).

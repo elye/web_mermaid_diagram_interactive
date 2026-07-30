@@ -20,7 +20,7 @@
  */
 import type { BBox, Point, EdgeLineStyle, EdgeWaypoint, EdgeAnchorOverride } from '@/shared/types/diagram';
 import { groupBBox, groupPolygon, fallbackBBox, pathEndpoints, pathMidpoint } from '../svg';
-import { anchorOn, anchorOnSide, centerOf, snapToPolygonOutline } from './anchors';
+import { anchorOn, anchorOnSide, centerOf, outwardNormal, snapToPolygonOutline } from './anchors';
 import { bezierPath, straightPath, orthogonalPath, waypointBezierPath, selfLoopPath } from './paths';
 import { nearestNodeId } from './endpointInference';
 
@@ -149,6 +149,14 @@ function routeSingleEdge(
     ? anchorOnSide(tgtRect, anchorOverride.target)
     : anchorOn(tgtRect, centerOf(srcRect));
 
+  // Outward normals BEFORE polygon snap — side membership is stable
+  // against the bbox regardless of how the anchor is nudged onto a
+  // sloped polygon edge. These force the curve to leave/enter
+  // perpendicular to the anchored side (vertical for top/bottom,
+  // horizontal for left/right).
+  const srcTangent = outwardNormal(srcRect, a);
+  const tgtTangent = outwardNormal(tgtRect, b);
+
   // For non-rectangular shapes (diamonds/hexagons), the bbox-based anchor
   // above lands OUTSIDE the actual outline. Snap it back onto the polygon.
   if (srcPoly) a = snapToPolygonOutline(srcPoly, a);
@@ -165,9 +173,9 @@ function routeSingleEdge(
     // 'curve' — anchor-aware cubic Bezier through all waypoints if any,
     // else standard S-curve bezier.
     if (waypoints && waypoints.length > 0) {
-      d = waypointBezierPath(a, waypoints, b, srcRect, tgtRect);
+      d = waypointBezierPath(a, waypoints, b, srcRect, tgtRect, srcTangent, tgtTangent);
     } else {
-      d = bezierPath(a, b);
+      d = bezierPath(a, b, srcTangent, tgtTangent);
     }
   }
   path.setAttribute('d', d);
