@@ -124,7 +124,8 @@ function routeSingleEdge(
   // Self-loop: draw a small kidney on the right side of the node.
   // Honour any user waypoint so the loop can be reshaped by drag.
   if (src && tgt && src === tgt) {
-    const loopD = selfLoopPath(srcRect, waypoints?.[0]);
+    const labelWidth = measureEdgeLabelWidth(path);
+    const loopD = selfLoopPath(srcRect, waypoints?.[0], labelWidth);
     path.setAttribute('d', loopD);
     // Keep hit-area in sync.
     const edgeIdSelf = path.getAttribute('data-edge-id');
@@ -238,4 +239,35 @@ function repositionEdgeLabels(svg: SVGSVGElement): void {
 
 function cssEscape(v: string): string {
   return v.replace(/["\\]/g, '\\$&');
+}
+
+/**
+ * Approximate width of an edge's label in SVG user units. Returns 0 if
+ * the edge has no label. Uses `getBBox()` when available (real browser)
+ * and falls back to a character-count heuristic for jsdom / tests.
+ *
+ * Kept lightweight — called on every route pass for every self-loop.
+ */
+function measureEdgeLabelWidth(path: SVGPathElement): number {
+  const id = path.getAttribute('data-edge-id');
+  if (!id) return 0;
+  const svg = path.ownerSVGElement;
+  if (!svg) return 0;
+  const label = svg.querySelector<SVGGElement>(
+    `g.edgeLabel[data-edge-id="${cssEscape(id)}"]`,
+  );
+  if (!label) return 0;
+  const text = (label.textContent ?? '').trim();
+  if (!text) return 0;
+
+  // Prefer the real rendered width when the DOM API is available.
+  try {
+    const bb = label.getBBox();
+    if (bb.width > 0) return bb.width;
+  } catch {
+    // getBBox() throws in jsdom on unlaid-out elements — fall through.
+  }
+  // Heuristic fallback: ~7px per character. Good enough for tests and
+  // for the initial paint before Mermaid has laid the label out.
+  return text.length * 7;
 }

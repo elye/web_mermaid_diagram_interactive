@@ -349,26 +349,103 @@ export function cubicThroughTwoPoints(p0: Point, m1: Point, m2: Point, p3: Point
 }
 
 /**
- * Kidney-shaped self-loop anchored on the RIGHT side of the given rect.
+ * Kidney-shaped self-loop anchored on the node's perimeter.
  * Used for edges whose source and target are the same node (`D --> D`).
  *
- * If `waypoint` is supplied the loop is routed through it (the user dragged
- * the midpoint handle), producing an arbitrary curve while keeping both
- * endpoints glued to the node.
+ * Behavior:
+ *   • No waypoint → classic right-side kidney. Loop grows outward to
+ *     accommodate the edge label (longer label → deeper loop) so the
+ *     label doesn't overlap the node.
+ *   • With waypoint → the loop's TWO endpoints slide around the node
+ *     perimeter to sit on the side facing the waypoint, straddling the
+ *     center-to-waypoint direction with a small perpendicular gap. The
+ *     curve is a quadratic Bezier routed through the waypoint itself
+ *     (Miro-style inverse-solve), so the dot follows the finger.
+ *
+ * @param labelWidth  Optional approximate width of the edge's label in
+ *                    pixels. When non-zero, the default (no-waypoint)
+ *                    loop expands outward so its "peak" sits beyond
+ *                    the label's right edge with a small margin.
  */
-export function selfLoopPath(rect: BBox, waypoint?: Point): string {
+export function selfLoopPath(rect: BBox, waypoint?: Point, labelWidth = 0): string {
+  const cx = rect.x + rect.width / 2;
   const cy = rect.y + rect.height / 2;
   const rightX = rect.x + rect.width;
-  const size = Math.max(20, Math.min(40, rect.height * 0.7));
-  const start: Point = { x: rightX, y: cy - size * 0.25 };
-  const end: Point = { x: rightX, y: cy + size * 0.25 };
 
-  if (waypoint) {
-    // Route through the user-placed waypoint using Miro-style quadratic
-    // Bezier (the waypoint is the exact drag point on the curve).
-    return quadraticThroughPoint(start, waypoint, end);
+  if (!waypoint) {
+    // Default: kidney on the right side. `size` controls both the
+    // vertical span of the two endpoints and how far the loop bulges
+    // out to the right. Grow it if the label is wide.
+    const baseSize = Math.max(20, Math.min(40, rect.height * 0.7));
+    // The label sits at the horizontal peak of the kidney. To keep it
+    // clear of the node, we want the peak-to-node distance to be at
+    // least (labelWidth / 2 + margin). The current peak sits at
+    // roughly `rightX + baseSize`, so bump size when the label demands.
+    const labelMargin = 12;
+    const requiredForLabel = labelWidth > 0 ? labelWidth / 2 + labelMargin : 0;
+    const size = Math.max(baseSize, requiredForLabel);
+    const start: Point = { x: rightX, y: cy - size * 0.25 };
+    const end: Point = { x: rightX, y: cy + size * 0.25 };
+    const outX = rightX + size;
+    return `M ${start.x} ${start.y} C ${outX} ${cy - size}, ${outX} ${cy + size}, ${end.x} ${end.y}`;
   }
 
-  const outX = rightX + size;
-  return `M ${start.x} ${start.y} C ${outX} ${cy - size}, ${outX} ${cy + size}, ${end.x} ${end.y}`;
+  // Waypoint present → derive endpoints from the direction (center → waypoint).
+  const dx = waypoint.x - cx;
+  const dy = waypoint.y - cy;
+  const dlen = Math.hypot(dx, dy) || 1;
+  const dirX = dx / dlen;
+  const dirY = dy / dlen;
+
+  // Ray from center in direction `dir` intersected with the bbox perimeter
+  // gives the "peak" point on the side facing the waypoint.
+  const halfW = rect.width / 2;
+  const halfH = rect.height / 2;
+  // Solve for the smallest positive t such that (cx + t*dirX, cy + t*dirY)
+  // hits the bbox: t = min(halfW/|dirX|, halfH/|dirY|).
+  const tX = Math.abs(dirX) > 1e-6 ? halfW / Math.abs(dirX) : Infinity;
+  const tY = Math.abs(dirY) > 1e-6 ? halfH / Math.abs(dirY) : Infinity;
+  const t = Math.min(tX, tY);
+  const peak: Point = { x: cx + dirX * t, y: cy + dirY * t };
+
+  // Perpendicular unit vector (rotate `dir` by 90°).
+  const perpX = -dirY;
+  const perpY = dirX;
+  // Gap between the two endpoints, proportional to the node size but
+  // clamped so tiny nodes still get a visible loop and huge nodes don't
+  // sprout comically wide anchors.
+  const gap = Math.max(8, Math.min(24, Math.min(rect.width, rect.height) * 0.25));
+
+  const rawStart: Point = { x: peak.x + perpX * gap, y: peak.y + perpY * gap };
+  const rawEnd: Point = { x: peak.x - perpX * gap, y: peak.y - perpY * gap };
+
+  // Snap each endpoint back onto the bbox perimeter — for pure-cardinal
+  // directions the raw points already sit on it; for diagonals they need
+  // clamping so they don't hover just outside the box.
+  const start = clampToBBoxPerimeter(rect, rawStart);
+  const end = clampToBBoxPerimeter(rect, rawEnd);
+
+  // Route a quadratic through the exact waypoint so the drag handle
+  // remains ON the curve.
+  return quadraticThroughPoint(start, waypoint, end);
+}
+
+/**
+ * Clamp a point that is already close to the bbox perimeter onto its
+ * nearest side, without moving it further than necessary. Used by
+ * `selfLoopPath` so diagonal-derived endpoints stay on the outline.
+ */
+function clampToBBoxPerimeter(rect: BBox, p: Point): Point {
+  const x = Math.max(rect.x, Math.min(rect.x + rect.width, p.x));
+  const y = Math.max(rect.y, Math.min(rect.y + rect.height, p.y));
+  // Snap to whichever side is closest.
+  const distTop = Math.abs(y - rect.y);
+  const distBottom = Math.abs(y - (rect.y + rect.height));
+  const distLeft = Math.abs(x - rect.x);
+  const distRight = Math.abs(x - (rect.x + rect.width));
+  const min = Math.min(distTop, distBottom, distLeft, distRight);
+  if (min === distTop) return { x, y: rect.y };
+  if (min === distBottom) return { x, y: rect.y + rect.height };
+  if (min === distLeft) return { x: rect.x, y };
+  return { x: rect.x + rect.width, y };
 }
