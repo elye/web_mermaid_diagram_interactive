@@ -21,7 +21,9 @@
 import type { BBox, Point, EdgeLineStyle, EdgeWaypoint, EdgeAnchorOverride } from '@/shared/types/diagram';
 import { groupBBox, groupPolygon, fallbackBBox, pathEndpoints, pathMidpoint } from '../svg';
 import { anchorOn, anchorOnSide, centerOf, outwardNormal, polygonOutwardNormal, snapToPolygonOutline } from './anchors';
-import { bezierPath, straightPath, orthogonalPath, waypointBezierPath, selfLoopPath } from './paths';
+import { bezierPath, straightPath, orthogonalPath } from './paths';
+import { waypointBezierPath } from './bezierChain';
+import { selfLoopPath } from './selfLoop';
 import { nearestNodeId } from './endpointInference';
 
 export interface RouteOptions {

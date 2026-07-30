@@ -12,6 +12,6 @@
  * so `useNodeDrag`, `DiagramCanvas`, and the existing tests keep working
  * without any churn.
  */
-export { routeAllEdges, nodeRect, anchorOn, bezierPath, straightPath, orthogonalPath, catmullRomPath } from './routing';
+export { routeAllEdges, nodeRect, anchorOn, bezierPath, straightPath, orthogonalPath } from './routing';
 export type { RouteOptions } from './routing';
 export { expandViewBoxToFit } from './viewbox';

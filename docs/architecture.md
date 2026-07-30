@@ -73,9 +73,12 @@ Idempotent path rewriting. Called on every render and every drag frame.
 | File                    | Responsibility |
 | ----------------------- | -------------- |
 | `anchors.ts`            | Pick a side-midpoint on a rect facing a target center ("Manhattan closest-side"). |
-| `paths.ts`              | Emit bezier & self-loop `d` strings. UI-agnostic pure functions. |
+| `pathFormat.ts`         | Numeric formatter (`fmt`) and bend-length clamp (`bendFor`) shared by every emitter — one source of truth for path-string precision. |
+| `paths.ts`              | Base emitters only: `bezierPath`, `straightPath`, `orthogonalPath`. UI-agnostic pure functions. |
+| `bezierChain.ts`        | Multi-waypoint C1-continuous chained cubic Béziers (`waypointBezierPath`) used when the user drops one or more control points onto an edge. |
+| `selfLoop.ts`           | Kidney-shaped self-loop paths (`D --> D`), with an optional waypoint override that rotates the loop to any side of the node and passes exactly through the drag point. |
 | `endpointInference.ts`  | Given a path with unknown source/target, find the nearest node to each endpoint (fallback when id decoding fails). |
-| `routeEdges.ts`         | Orchestrator: collect node rects, resolve endpoints, emit path, reposition edge labels. |
+| `routeEdges.ts`         | Orchestrator: collect node rects, resolve endpoints, emit path (routing through the emitter that matches `EdgeLineStyle` / self-loop / waypoint state), reposition edge labels. |
 
 ### `services/edgeIds.ts` — Mermaid id decoding
 
@@ -112,8 +115,21 @@ metadata without re-parsing the DOM (e.g. the diagram store).
 
 Backwards-compatible barrel that re-exports the historically public router
 surface (`routeAllEdges`, `nodeRect`, `anchorOn`, `bezierPath`,
-`expandViewBoxToFit`, `RouteOptions`). New code should import from
-`services/` (or the narrower sub-barrels) directly.
+`waypointBezierPath`, `selfLoopPath`, `expandViewBoxToFit`, `RouteOptions`).
+New code should import from `services/` (or the narrower sub-barrels)
+directly.
+
+### Canvas interaction hooks
+
+Two SVG-touching hooks share the same "read from stores → mutate live DOM"
+pattern; they never re-render React during a drag.
+
+| File                | Responsibility |
+| ------------------- | -------------- |
+| `useNodeDrag.ts`    | Pointer-event lifecycle for node dragging + incident-edge rerouting. |
+| `useEdgeDrag.ts`    | Pointer-event lifecycle for waypoint and anchor drags. History commit fires on the first move-that-mutates so undo restores the pre-drag state. |
+| `edgeHandles.ts`    | Injects `.mf-edge-handle` circles (waypoint ● + anchor ◯) into the SVG for every selected edge, and re-injects them on every dep change so a full SVG re-render doesn't strand them. |
+| `edgeDragUtils.ts`  | Shared drag helpers: `svgPoint` (client → SVG coords via `CTM`), `buildLineStyleMap`, `cssEscape`. |
 
 ## Data flow
 
@@ -188,6 +204,41 @@ The full pipeline is a straight line: raw text → Mermaid → static-attribute
 annotation → interaction. Nothing calls `getBBox()` on the hot path, so drags
 stay smooth and the whole service layer runs happily in jsdom (`vitest`).
 
+## Persistence & undo
+
+Two orthogonal state-preservation mechanisms live in `features/file-io/` and
+`stores/historyStore.ts` respectively. Both cover the same slice of state so
+that a change made through the canvas survives BOTH a page refresh AND an
+undo keystroke.
+
+### Autosave (`services/autoSave.ts`)
+
+- Subscribes to `diagramStore`, `styleStore`, and `uiStore` on
+  `startAutoSave()`. Every change schedules a debounced save
+  (`AUTOSAVE_DEBOUNCE_MS = 500 ms`) into `localStorage['mf.autosave.v1']`.
+- **Flush on unload.** `pagehide` and `beforeunload` both invoke
+  `flushAutoSave()` which cancels the pending timer and writes synchronously,
+  so a mutation made in the last few hundred ms before a refresh is not lost.
+- **Restore.** `restoreAutoSave()` reads the snapshot and hydrates all three
+  stores. Accepts both `v1.0` (legacy — no edge state) and `v1.1` files;
+  missing v1.1 fields default to empty maps.
+
+### History (`stores/historyStore.ts`)
+
+- Each `commit()` captures a 7-field `Snapshot`: `source`,
+  `positionOverrides`, `edgeWaypoints`, `edgeAnchorOverrides`, `nodeStyles`,
+  `edgeStyles`, `annotations`.
+- `apply()` hydrates BOTH `diagramStore` and `styleStore`, so undoing a
+  style change and undoing a waypoint drag share the same code path.
+- `useEdgeDrag` calls `commit()` on the first move-that-mutates (not on
+  pointer-down), matching the "commit last-committed-state, then mutate"
+  contract used by `useNodeDrag`.
+- The visual-desync bug (dot didn't move on undo) was rooted in
+  `DiagramCanvas`'s edge-drag re-injection dep list not fingerprinting
+  `edgeWaypoints`. The dep list now includes it, so any store-level change
+  (undo, redo, file load, autosave restore) re-injects the handles at the
+  new coordinates.
+
 ## Design invariants
 
 - **No `getBBox()` in production code.** All geometry is derived from static
@@ -229,10 +280,10 @@ stay smooth and the whole service layer runs happily in jsdom (`vitest`).
   `EdgeLineStyle` union, then handle it in `routeEdges.ts`'s style switch.
   Anchors, path shapes, and self-loops are already isolated behind their own
   pure functions.
-- **Multi-segment waypoints** — `edgeWaypoints` stores a `EdgeWaypoint[]`
+- **Multi-segment waypoints** — `edgeWaypoints` stores an `EdgeWaypoint[]`
   array; the current UI exposes one control point per edge, but the router
-  already supports arbitrary waypoint sequences via the `waypointCurvePath`
-  builder.
+  already supports arbitrary waypoint sequences via the `waypointBezierPath`
+  builder (chained C1-continuous cubic Béziers).
 - **Advanced layouts** — inject a dagre/ELK pass between `renderEngine` and
   the store; export a `PositionOverride` map keyed by `data-node-id`.
 - **Extra export formats** — drop a new service in `features/file-io/services/`
