@@ -61,6 +61,12 @@ data-flow diagram. The rules in short:
 - All cross-module communication happens through the Zustand stores in
   `src/stores/`.
 
+The canvas service layer — Mermaid post-processing, edge routing, viewBox
+fitting — is broken into small, single-purpose modules under
+`src/features/canvas/services/` (`svg/` primitives, `routing/` pipeline,
+`edgeIds`, `viewbox`, and thin orchestrators). Every module is under ~160
+lines and covered by a focused `vitest` suite.
+
 ## 📁 File format
 
 See [`docs/file-format.md`](docs/file-format.md).

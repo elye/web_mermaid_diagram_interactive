@@ -1,20 +1,96 @@
 /**
- * svgManipulator — post-processes a Mermaid-produced SVG string:
+ * svgManipulator — post-processes a Mermaid-produced SVG string so the
+ * rest of the app can treat it as an interactive, addressable scene:
  *
- *  - Adds `data-node-id` / `data-edge-id` / `data-edge-source` / `data-edge-target`
- *    attributes on interactive elements, derived from Mermaid's internal id
- *    conventions.
- *  - Runs an initial routing pass so edges are anchor-aware from the very
- *    first render (no visible "jump" on first drag).
- *  - Extracts node bounding boxes for use by the drag/edge-routing systems.
+ *   1. Annotate every node group with `data-node-id` (the user's id).
+ *   2. Annotate every edge path with `data-edge-id`, `data-edge-source`,
+ *      `data-edge-target`.
+ *   3. Annotate every edge label with the id of the edge it belongs to
+ *      (by position — Mermaid emits labels in the same DOM order as edges).
+ *   4. Run an initial `routeAllEdges` + `expandViewBoxToFit` pass so the
+ *      diagram is anchor-correct from the very first paint (no visible
+ *      jump on first interaction).
  *
- * These functions are pure and DOM-parser based, so they are safe to test
- * headlessly (jsdom).
+ * This module is intentionally thin — the heavy lifting lives in
+ * `edgeIds` (id parsing), `svg/*` (geometry), `routing/*` (rerouting),
+ * and `viewbox` (fitting). We just glue them together.
  */
-import type { NodeMeta, EdgeMeta, BBox } from '@/shared/types/diagram';
-import { routeAllEdges, expandViewBoxToFit } from './edgeRouter';
+import type { NodeMeta, EdgeMeta } from '@/shared/types/diagram';
+import { extractUserNodeId, extractEdgeEndpoints } from './edgeIds';
+import { groupBBox } from './svg';
+import { routeAllEdges } from './routing';
+import { expandViewBoxToFit } from './viewbox';
 
 const NODE_CLASS_RE = /(?:^|\s)node(?:\s|$)/;
+
+// ─── Public API ────────────────────────────────────────────────────────
+
+/**
+ * Annotate the SVG in-place and return the serialised result. Idempotent —
+ * safe to feed its own output back in.
+ */
+export function annotateInteractiveElements(svgString: string): string {
+  const doc = parseSvg(svgString);
+  const svg = doc.documentElement as unknown as SVGSVGElement;
+  if (svg.nodeName.toLowerCase() !== 'svg') return svgString;
+
+  // Never clip content that has been moved outside the original box.
+  (svg as unknown as HTMLElement).style.overflow = 'visible';
+
+  const nodeIdSet = annotateNodes(svg);
+  const edgeIdsInOrder = annotateEdges(svg, nodeIdSet);
+  annotateEdgeLabels(svg, edgeIdsInOrder);
+
+  // Initial routing pass so anchors are already aligned on first paint.
+  try {
+    routeAllEdges(svg);
+    expandViewBoxToFit(svg);
+  } catch {
+    /* jsdom or malformed svg — DiagramCanvas will retry on mount. */
+  }
+
+  return serialize(doc);
+}
+
+/**
+ * Extract node metadata (id, label text, root-space bbox) for use by
+ * the store, drag hook, and any downstream layout systems.
+ */
+export function extractNodes(svgString: string): NodeMeta[] {
+  const doc = parseSvg(svgString);
+  const nodes: NodeMeta[] = [];
+  doc.querySelectorAll('g[data-node-id]').forEach((g) => {
+    const id = g.getAttribute('data-node-id');
+    if (!id) return;
+    const bbox = groupBBox(g);
+    if (!bbox) return;
+    const label = (g.querySelector('.nodeLabel, foreignObject, text')?.textContent ?? id).trim();
+    nodes.push({ id, label, bbox });
+  });
+  return nodes;
+}
+
+/**
+ * Extract edge metadata (id + resolved source/target ids). Missing endpoints
+ * are surfaced as `null` — callers may look them up via the geometry
+ * fallback in the router if needed.
+ */
+export function extractEdges(svgString: string): EdgeMeta[] {
+  const doc = parseSvg(svgString);
+  const edges: EdgeMeta[] = [];
+  doc.querySelectorAll('path[data-edge-id]').forEach((p) => {
+    const id = p.getAttribute('data-edge-id');
+    if (!id) return;
+    edges.push({
+      id,
+      sourceId: p.getAttribute('data-edge-source'),
+      targetId: p.getAttribute('data-edge-target'),
+    });
+  });
+  return edges;
+}
+
+// ─── Internals ─────────────────────────────────────────────────────────
 
 function parseSvg(svgString: string): Document {
   return new DOMParser().parseFromString(svgString, 'image/svg+xml');
@@ -25,241 +101,59 @@ function serialize(doc: Document): string {
 }
 
 /**
- * Extract the user-defined node ID from Mermaid's mangled DOM id.
- * Mermaid emits ids like "flowchart-A-0", "flowchart-A0-1", "flowchart-A-2-4".
- * The user id sits between the diagram-type prefix and a trailing numeric
- * counter. Some diagrams (state, class) prefix differently.
+ * Tag every `<g class="node">` with `data-node-id` and return the set of
+ * unique user-facing ids seen (used to disambiguate edge id parsing).
  */
-function extractUserNodeId(rawId: string): string {
-  // Strip a known prefix.
-  const withoutPrefix = rawId.replace(
-    /^(?:flowchart|node|state|classGroup|class|er|sequence)-/,
-    '',
-  );
-  // Strip trailing "-<digits>" counters (Mermaid appends a render counter).
-  return withoutPrefix.replace(/-\d+$/, '');
-}
-
-/**
- * Extract source/target user node IDs from a Mermaid edge id.
- * Mermaid encodes edges as: `L-<source>-<target>-<n>` (dash form, current),
- * or `L_<source>_<target>_<n>` (underscore form, older).
- *
- * The counter (`-<n>` or `_<n>`) is always a trailing integer.
- *
- * Splitting `<source>` from `<target>` is ambiguous when either contains the
- * same separator character (e.g. a node named `foo-bar`). We resolve this
- * by walking every possible split position and picking the one where BOTH
- * halves match a known user node id (`knownIds`). If we cannot disambiguate,
- * we return null rather than guess — the router will simply skip that edge
- * (leaving Mermaid's original path in place).
- */
-function extractEdgeEndpoints(
-  edgeId: string,
-  knownIds: ReadonlySet<string>,
-): { source: string; target: string } | null {
-  // 1. Detect separator + strip prefix + trailing counter.
-  let inner: string;
-  let sep: '-' | '_';
-  const dashM = /^L-(.+)-\d+$/.exec(edgeId);
-  const underM = /^L_(.+)_\d+$/.exec(edgeId);
-  if (dashM) {
-    inner = dashM[1];
-    sep = '-';
-  } else if (underM) {
-    inner = underM[1];
-    sep = '_';
-  } else {
-    return null;
-  }
-
-  // 2. Fast path — the common case: node ids contain no separator character.
-  //    Try each split and prefer one whose both halves are known ids.
-  const parts = inner.split(sep);
-  // Walk from smallest source to largest — we prefer the FIRST valid split.
-  for (let i = 1; i < parts.length; i += 1) {
-    const source = parts.slice(0, i).join(sep);
-    const target = parts.slice(i).join(sep);
-    if (knownIds.has(source) && knownIds.has(target)) {
-      return { source, target };
-    }
-  }
-
-  // 3. Fallback — the parser has ambiguous ids OR we haven't collected the
-  //    node id set yet (e.g. an edge with no matching node in the DOM).
-  //    In that case, guess "source has no separator" — the simplest common case.
-  if (parts.length >= 2) {
-    return { source: parts[0], target: parts.slice(1).join(sep) };
-  }
-  return null;
-}
-
-/**
- * Add machine-readable interaction attributes to the SVG and perform an
- * initial edge-routing pass so anchors start out aligned to node sides.
- */
-export function annotateInteractiveElements(svgString: string): string {
-  const doc = parseSvg(svgString);
-  const svg = doc.documentElement as unknown as SVGSVGElement;
-  if (svg.nodeName.toLowerCase() !== 'svg') return svgString;
-
-  // Ensure the SVG never clips content that has been moved outside its box.
-  (svg as unknown as HTMLElement).style.overflow = 'visible';
-
-  // --- Nodes ---
-  // Mermaid emits <g class="node" id="flowchart-A-0"> — but the class list
-  // varies by diagram type, so we also accept anything with `class~="node"`.
-  const nodeGroups = svg.querySelectorAll('g.node, g[class~="node"]');
-  const seenIds = new Set<string>();
+function annotateNodes(svg: SVGSVGElement): Set<string> {
   const nodeIdSet = new Set<string>();
-  nodeGroups.forEach((g) => {
+  const seen = new Set<string>();
+  svg.querySelectorAll('g.node, g[class~="node"]').forEach((g) => {
     if (!NODE_CLASS_RE.test(g.getAttribute('class') ?? '')) return;
     const rawId = g.getAttribute('id') ?? '';
     let userId = extractUserNodeId(rawId);
-    // Disambiguate duplicates that can occur when Mermaid renders subgraphs.
-    if (seenIds.has(userId)) userId = `${userId}__${seenIds.size}`;
-    seenIds.add(userId);
+    // Disambiguate collisions that occur in subgraphs.
+    if (seen.has(userId)) userId = `${userId}__${seen.size}`;
+    seen.add(userId);
     nodeIdSet.add(userId);
     g.setAttribute('data-node-id', userId);
     g.classList.add('mf-node--draggable');
   });
+  return nodeIdSet;
+}
 
-  // --- Edges ---
-  // Selector covers current Mermaid (`g.edgePaths > path.flowchart-link`),
-  // older releases, and defensively anything with an `edge` class.
-  const edgeGroups = svg.querySelectorAll(
+/**
+ * Tag every edge path with `data-edge-id` + `data-edge-source/target`.
+ * Returns the ids in DOM order so we can match edge labels positionally.
+ */
+function annotateEdges(svg: SVGSVGElement, nodeIdSet: ReadonlySet<string>): string[] {
+  const paths = svg.querySelectorAll(
     'g.edgePaths > path, path.flowchart-link, path[class*="edge"]',
   );
+  const idsInOrder: string[] = [];
   let counter = 0;
-  const edgeIdsInOrder: string[] = [];
-  edgeGroups.forEach((p) => {
+  paths.forEach((p) => {
     counter += 1;
     const rawId = p.getAttribute('id') ?? `edge-${counter}`;
     p.setAttribute('data-edge-id', rawId);
-    edgeIdsInOrder.push(rawId);
-    // Disambiguate source/target using the known node-id set so ids like
-    // `L-Start-Decision-0` don't get chopped to `Start-Decisio` + `n`.
+    idsInOrder.push(rawId);
     const endpoints = extractEdgeEndpoints(rawId, nodeIdSet);
     if (endpoints) {
       p.setAttribute('data-edge-source', endpoints.source);
       p.setAttribute('data-edge-target', endpoints.target);
     }
   });
+  return idsInOrder;
+}
 
-  // Tag edge labels with their edge id too so the router can move them
-  // alongside the path. Mermaid does NOT put an `id` on `g.edgeLabel`, but it
-  // emits one `<g class="edgeLabel">` per edge in the same DOM order as the
-  // edge paths — so we match them positionally against `edgeIdsInOrder`.
-  const edgeLabels = svg.querySelectorAll('g.edgeLabels > g.edgeLabel');
-  edgeLabels.forEach((label, idx) => {
-    const id = edgeIdsInOrder[idx];
+/**
+ * Mermaid does NOT put an `id` on `g.edgeLabel`, but it emits one
+ * label group per edge in the same DOM order as the edge paths — so we
+ * link them positionally.
+ */
+function annotateEdgeLabels(svg: SVGSVGElement, edgeIdsInOrder: readonly string[]): void {
+  const labels = svg.querySelectorAll('g.edgeLabels > g.edgeLabel');
+  labels.forEach((label, i) => {
+    const id = edgeIdsInOrder[i];
     if (id) label.setAttribute('data-edge-id', id);
   });
-
-  // Initial routing pass so anchors are already aligned when the SVG appears.
-  try {
-    routeAllEdges(svg);
-    expandViewBoxToFit(svg);
-  } catch {
-    /* jsdom or malformed svg — safe to ignore, DiagramCanvas will retry. */
-  }
-
-  return serialize(doc);
-}
-
-/**
- * Extract node bounding boxes for use in position resolution.
- */
-export function extractNodes(svgString: string): NodeMeta[] {
-  const doc = parseSvg(svgString);
-  const groups = doc.querySelectorAll('g[data-node-id]');
-  const nodes: NodeMeta[] = [];
-
-  groups.forEach((g) => {
-    const id = g.getAttribute('data-node-id')!;
-    const bbox = readGroupBBox(g);
-    if (!bbox) return;
-    const label = (g.querySelector('.nodeLabel, foreignObject, text')?.textContent ?? id).trim();
-    nodes.push({ id, label, bbox });
-  });
-
-  return nodes;
-}
-
-/**
- * Extract edges as simple metadata; source/target inference from Mermaid's
- * id conventions when available.
- */
-export function extractEdges(svgString: string): EdgeMeta[] {
-  const doc = parseSvg(svgString);
-  const paths = doc.querySelectorAll('path[data-edge-id]');
-  const edges: EdgeMeta[] = [];
-  paths.forEach((p) => {
-    const id = p.getAttribute('data-edge-id')!;
-    edges.push({
-      id,
-      sourceId: p.getAttribute('data-edge-source'),
-      targetId: p.getAttribute('data-edge-target'),
-    });
-  });
-  return edges;
-}
-
-/**
- * Read a group's bounding box in the SVG root's coordinate space. Composes
- * the group's `transform="translate(x,y)"` with the shape child's own
- * transform (Mermaid uses one on polygons/etc. to center them).
- */
-function readGroupBBox(g: Element): BBox | null {
-  const t = parseTranslateAttr(g.getAttribute('transform'));
-  const shape = g.querySelector('rect, polygon, circle, ellipse, path');
-  if (!shape) return null;
-  const s = parseTranslateAttr(shape.getAttribute('transform'));
-  const ox = t.x + s.x;
-  const oy = t.y + s.y;
-
-  if (shape.tagName === 'rect') {
-    const x = Number(shape.getAttribute('x') ?? '0');
-    const y = Number(shape.getAttribute('y') ?? '0');
-    const width = Number(shape.getAttribute('width') ?? '0');
-    const height = Number(shape.getAttribute('height') ?? '0');
-    return { x: ox + x, y: oy + y, width, height };
-  }
-  if (shape.tagName === 'circle') {
-    const cx = Number(shape.getAttribute('cx') ?? '0');
-    const cy = Number(shape.getAttribute('cy') ?? '0');
-    const r = Number(shape.getAttribute('r') ?? '0');
-    return { x: ox + cx - r, y: oy + cy - r, width: r * 2, height: r * 2 };
-  }
-  if (shape.tagName === 'ellipse') {
-    const cx = Number(shape.getAttribute('cx') ?? '0');
-    const cy = Number(shape.getAttribute('cy') ?? '0');
-    const rx = Number(shape.getAttribute('rx') ?? '0');
-    const ry = Number(shape.getAttribute('ry') ?? '0');
-    return { x: ox + cx - rx, y: oy + cy - ry, width: rx * 2, height: ry * 2 };
-  }
-  if (shape.tagName === 'polygon') {
-    const pts = (shape.getAttribute('points') ?? '')
-      .split(/[\s,]+/)
-      .map(Number)
-      .filter(Number.isFinite);
-    if (pts.length >= 4) {
-      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-      for (let i = 0; i < pts.length; i += 2) {
-        minX = Math.min(minX, pts[i]);
-        maxX = Math.max(maxX, pts[i]);
-        minY = Math.min(minY, pts[i + 1]);
-        maxY = Math.max(maxY, pts[i + 1]);
-      }
-      return { x: ox + minX, y: oy + minY, width: maxX - minX, height: maxY - minY };
-    }
-  }
-  // path or unrecognised shape — best-effort empty box at the origin.
-  return { x: ox, y: oy, width: 0, height: 0 };
-}
-
-function parseTranslateAttr(transform: string | null): { x: number; y: number } {
-  if (!transform) return { x: 0, y: 0 };
-  const m = /translate\(\s*(-?\d+(?:\.\d+)?)[\s,]+(-?\d+(?:\.\d+)?)\s*\)/.exec(transform);
-  return m ? { x: Number(m[1]), y: Number(m[2]) } : { x: 0, y: 0 };
 }
