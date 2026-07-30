@@ -49,8 +49,9 @@ body {
 
 /* Diagram canvas SVG interactions */
 .mf-canvas svg {
-  max-width: none;
+  max-width: none !important;
   height: auto;
+  overflow: visible;
   user-select: none;
 }
 .mf-node--draggable {

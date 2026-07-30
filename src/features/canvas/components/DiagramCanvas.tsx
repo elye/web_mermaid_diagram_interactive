@@ -11,6 +11,7 @@ import { useUiStore } from '@/stores/uiStore';
 import { useMermaidRender } from '../hooks/useMermaidRender';
 import { useCanvasInteraction } from '../hooks/useCanvasInteraction';
 import { useNodeDrag } from '../hooks/useNodeDrag';
+import { routeAllEdges, expandViewBoxToFit } from '../services/edgeRouter';
 
 export function DiagramCanvas() {
   useMermaidRender();
@@ -35,14 +36,30 @@ export function DiagramCanvas() {
     }
   }, [svg]);
 
-  // Apply per-node position overrides after each render.
-  useEffect(() => {
+  // Apply per-node position overrides after each render, then re-run the
+  // edge router so lines follow the overridden positions, then expand the
+  // viewBox to fit. This is what makes moved nodes survive Mermaid re-renders
+  // (which happen whenever the user types new source).
+  useLayoutEffect(() => {
     const host = svgHostRef.current;
     if (!host) return;
+    const svgEl = host.querySelector('svg') as SVGSVGElement | null;
+    if (!svgEl) return;
+
+    // Never clip a moved node.
+    svgEl.style.overflow = 'visible';
+    (svgEl.style as CSSStyleDeclaration).maxWidth = 'none';
+
+    // Only apply overrides for node IDs that still exist in the freshly
+    // rendered SVG. Stale IDs from a previous source revision are ignored,
+    // but kept in the store so undo can restore them.
     Object.entries(positionOverrides).forEach(([id, pos]) => {
-      const g = host.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(id)}"]`);
+      const g = svgEl.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(id)}"]`);
       if (g) g.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
     });
+
+    routeAllEdges(svgEl);
+    expandViewBoxToFit(svgEl);
   }, [positionOverrides, svg]);
 
   // Apply per-node/edge style overrides.
@@ -93,11 +110,16 @@ export function DiagramCanvas() {
       className="mf-canvas relative h-full w-full overflow-hidden bg-surface"
       style={{ touchAction: 'none' }}
     >
+      {/*
+        The transform host is centered inside the viewport but must NOT clip
+        its child — we intentionally omit overflow-hidden here so nodes that
+        the user drags off the initial layout remain visible.
+       */}
       <div
         ref={svgHostRef}
-        className="absolute inset-0 flex origin-center items-center justify-center"
+        className="absolute left-1/2 top-1/2 flex items-center justify-center"
         style={{
-          transform: `translate(${viewport.panX}px, ${viewport.panY}px) scale(${viewport.zoom})`,
+          transform: `translate(-50%, -50%) translate(${viewport.panX}px, ${viewport.panY}px) scale(${viewport.zoom})`,
           transformOrigin: 'center center',
           transition: 'transform 60ms linear',
         }}

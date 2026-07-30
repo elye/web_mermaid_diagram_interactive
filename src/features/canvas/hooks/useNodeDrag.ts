@@ -1,24 +1,40 @@
 /**
- * useNodeDrag — attaches drag handlers to node <g> elements inside the
- * rendered SVG. On drag, updates the group's transform live; on release,
- * commits the position override to diagramStore.
+ * useNodeDrag
+ * -----------
+ * Attaches pointer-drag handlers to node <g> elements inside the rendered
+ * SVG. Responsibilities:
  *
- * We piggyback on Mermaid's native `transform="translate(x,y)"` on node
- * groups, layering our override on top.
+ *  - Update the group's `transform="translate(x,y)"` live during drag.
+ *  - Re-route ALL connected edges on every pointer-move via the shared
+ *    edgeRouter, so lines stay glued to node sides.
+ *  - Expand the SVG viewBox on-the-fly so nodes never disappear off-canvas.
+ *  - Commit the final position to diagramStore.positionOverrides on release
+ *    (this survives Mermaid re-renders — DiagramCanvas re-applies overrides
+ *    after every new render).
+ *  - Support multi-node drag: if the pressed node is part of the current
+ *    selection, every selected node moves together by the same delta.
  */
 import { useEffect } from 'react';
 import { useDiagramStore } from '@/stores/diagramStore';
 import { useSelectionStore } from '@/stores/selectionStore';
 import { useHistoryStore } from '@/stores/historyStore';
 import { useUiStore } from '@/stores/uiStore';
+import { routeAllEdges, expandViewBoxToFit } from '../services/edgeRouter';
 
-interface DragCtx {
+interface DragTarget {
   id: string;
+  group: SVGGElement;
   origX: number;
   origY: number;
+}
+
+interface DragCtx {
+  primaryId: string;
+  targets: DragTarget[];
   pointerStartX: number;
   pointerStartY: number;
-  group: SVGGElement;
+  svg: SVGSVGElement;
+  moved: boolean;
 }
 
 export function useNodeDrag(svgHostRef: React.RefObject<HTMLElement>) {
@@ -29,55 +45,84 @@ export function useNodeDrag(svgHostRef: React.RefObject<HTMLElement>) {
     let ctx: DragCtx | null = null;
 
     const onPointerDown = (e: PointerEvent) => {
-      const target = e.target as Element;
-      const group = target.closest('g[data-node-id]') as SVGGElement | null;
+      const target = e.target as Element | null;
+      const group = target?.closest('g[data-node-id]') as SVGGElement | null;
       if (!group) return;
 
       const id = group.getAttribute('data-node-id')!;
-      const additive = e.shiftKey;
-      useSelectionStore.getState().select(id, additive);
+      const svg = group.ownerSVGElement;
+      if (!svg) return;
 
-      const override = useDiagramStore.getState().positionOverrides[id];
-      const { origX, origY } = readTranslate(group, override);
+      // Update selection: additive on Shift, replace otherwise (unless
+      // clicking a node that's already part of a multi-select — preserve it).
+      const selection = useSelectionStore.getState();
+      const alreadySelected = selection.selectedNodeIds.has(id);
+      if (!e.shiftKey && !alreadySelected) {
+        selection.select(id, false);
+      } else if (e.shiftKey) {
+        selection.select(id, true);
+      }
+
+      // Collect drag targets: all selected nodes if the pressed one is in
+      // the selection AND there is more than one; otherwise just the pressed.
+      const selected = useSelectionStore.getState().selectedNodeIds;
+      const ids = selected.has(id) && selected.size > 1 ? Array.from(selected) : [id];
+
+      const targets: DragTarget[] = [];
+      ids.forEach((nid) => {
+        const g = svg.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nid)}"]`);
+        if (!g) return;
+        const { x, y } = readTranslate(g);
+        targets.push({ id: nid, group: g, origX: x, origY: y });
+      });
+      if (targets.length === 0) return;
 
       ctx = {
-        id,
-        group,
-        origX,
-        origY,
+        primaryId: id,
+        targets,
         pointerStartX: e.clientX,
         pointerStartY: e.clientY,
+        svg,
+        moved: false,
       };
-      group.classList.add('mf-node--dragging');
+      targets.forEach((t) => t.group.classList.add('mf-node--dragging'));
       e.stopPropagation();
-      (host as HTMLElement).setPointerCapture?.(e.pointerId);
       window.addEventListener('pointermove', onPointerMove);
       window.addEventListener('pointerup', onPointerUp);
     };
 
     const onPointerMove = (e: PointerEvent) => {
       if (!ctx) return;
-      const zoom = useUiStore.getState().viewport.zoom;
+      const zoom = useUiStore.getState().viewport.zoom || 1;
       const dx = (e.clientX - ctx.pointerStartX) / zoom;
       const dy = (e.clientY - ctx.pointerStartY) / zoom;
-      writeTranslate(ctx.group, ctx.origX + dx, ctx.origY + dy);
-      // Re-route connected edges live.
-      rerouteEdgesFor(ctx.id, ctx.group);
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) ctx.moved = true;
+
+      ctx.targets.forEach((t) => {
+        writeTranslate(t.group, t.origX + dx, t.origY + dy);
+      });
+
+      // Route every edge every frame — cheap for typical diagrams and
+      // guarantees adjacent edges (even for non-dragged nodes) stay hooked up.
+      routeAllEdges(ctx.svg);
+      expandViewBoxToFit(ctx.svg);
     };
 
     const onPointerUp = () => {
       if (!ctx) return;
-      const zoom = useUiStore.getState().viewport.zoom;
-      const dxScreen =
-        (readTranslate(ctx.group).origX - ctx.origX) * zoom; /* no-op placeholder */
-      void dxScreen;
-      const finalPos = readTranslate(ctx.group);
-      useHistoryStore.getState().commit();
-      useDiagramStore.getState().setPositionOverride(ctx.id, {
-        x: finalPos.origX,
-        y: finalPos.origY,
+      const wasMoved = ctx.moved;
+      const finals = ctx.targets.map((t) => {
+        t.group.classList.remove('mf-node--dragging');
+        const { x, y } = readTranslate(t.group);
+        return { id: t.id, x, y };
       });
-      ctx.group.classList.remove('mf-node--dragging');
+
+      if (wasMoved) {
+        useHistoryStore.getState().commit();
+        finals.forEach(({ id, x, y }) => {
+          useDiagramStore.getState().setPositionOverride(id, { x, y });
+        });
+      }
       ctx = null;
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
@@ -89,67 +134,19 @@ export function useNodeDrag(svgHostRef: React.RefObject<HTMLElement>) {
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
     };
-    // Re-attach whenever the SVG content changes (new render).
   }, [svgHostRef]);
 }
 
-function readTranslate(
-  g: SVGGElement,
-  override?: { x: number; y: number },
-): { origX: number; origY: number } {
-  if (override) return { origX: override.x, origY: override.y };
+function readTranslate(g: SVGGElement): { x: number; y: number } {
   const t = g.getAttribute('transform') ?? '';
   const m = /translate\(\s*(-?\d+(?:\.\d+)?)[\s,]+(-?\d+(?:\.\d+)?)\s*\)/.exec(t);
-  return { origX: m ? Number(m[1]) : 0, origY: m ? Number(m[2]) : 0 };
+  return { x: m ? Number(m[1]) : 0, y: m ? Number(m[2]) : 0 };
 }
 
 function writeTranslate(g: SVGGElement, x: number, y: number) {
   g.setAttribute('transform', `translate(${x}, ${y})`);
 }
 
-/**
- * Best-effort edge rerouting: for every path adjacent to the dragged node,
- * rewrite its `d` attribute to a straight-ish cubic bezier between the
- * connected node centers. Falls back to leaving the path untouched.
- */
-function rerouteEdgesFor(nodeId: string, host: SVGGElement) {
-  const svg = host.ownerSVGElement;
-  if (!svg) return;
-  const edges = svg.querySelectorAll<SVGPathElement>('path[data-edge-id]');
-  edges.forEach((path) => {
-    const id = path.getAttribute('data-edge-id') ?? '';
-    const m = /^L-([^-]+)-([^-]+)/.exec(id);
-    if (!m) return;
-    if (m[1] !== nodeId && m[2] !== nodeId) return;
-    const src = svg.querySelector<SVGGElement>(`g[data-node-id="${m[1]}"]`);
-    const dst = svg.querySelector<SVGGElement>(`g[data-node-id="${m[2]}"]`);
-    if (!src || !dst) return;
-    const a = centerOfGroup(src);
-    const b = centerOfGroup(dst);
-    const dx = (b.x - a.x) * 0.5;
-    path.setAttribute(
-      'd',
-      `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`,
-    );
-  });
-}
-
-function centerOfGroup(g: SVGGElement): { x: number; y: number } {
-  const t = /translate\(\s*(-?\d+(?:\.\d+)?)[\s,]+(-?\d+(?:\.\d+)?)\s*\)/.exec(
-    g.getAttribute('transform') ?? '',
-  );
-  const tx = t ? Number(t[1]) : 0;
-  const ty = t ? Number(t[2]) : 0;
-  const bbox = (g.querySelector('rect') ?? g.querySelector('polygon') ?? g.querySelector('circle')) as
-    | SVGGraphicsElement
-    | null;
-  if (bbox && 'getBBox' in bbox) {
-    try {
-      const b = bbox.getBBox();
-      return { x: tx + b.x + b.width / 2, y: ty + b.y + b.height / 2 };
-    } catch {
-      /* jsdom */
-    }
-  }
-  return { x: tx, y: ty };
+function cssEscape(v: string): string {
+  return v.replace(/["\\]/g, '\\$&');
 }
