@@ -64,23 +64,52 @@ export function orthogonalPath(a: Point, b: Point): string {
 }
 
 /**
- * Cubic bezier routed through a single user-dragged waypoint `w`.
+ * Smooth cubic bezier routed through a single user-dragged waypoint `w`.
  *
- * Two separate cubic segments are stitched so the path is C1-continuous
- * at the waypoint: a→w→b.  Each segment uses a simple "pull toward
- * waypoint" heuristic for control points.
+ * Uses Catmull-Rom → cubic Bézier conversion so the curve passes through
+ * all three points (a, w, b) with a continuous tangent at `w` — no kink.
+ *
+ * The tangent at the interior point `w` is the vector from `a` to `b`
+ * scaled by the Catmull-Rom tension (α = 0.5 gives centripetal CR).
+ * The two cubic segments share that tangent so the junction is C1.
+ *
+ * For the boundary points we use a phantom "virtual" control point by
+ * reflecting: the tangent at `a` points toward `w`, and at `b` away from `w`.
  */
 export function waypointCurvePath(a: Point, w: Point, b: Point): string {
-  // Control points for segment a→w: pull from both ends towards the waypoint.
-  const c1ax = a.x + (w.x - a.x) * 0.5;
-  const c1ay = a.y + (w.y - a.y) * 0.5;
-  // Control points for segment w→b.
-  const c2bx = w.x + (b.x - w.x) * 0.5;
-  const c2by = w.y + (b.y - w.y) * 0.5;
+  // Catmull-Rom tension (0.5 = centripetal, feels natural for drag handles).
+  const alpha = 0.5;
+
+  // Tangent at interior waypoint w: proportional to (b - a).
+  const twx = (b.x - a.x) * alpha;
+  const twy = (b.y - a.y) * alpha;
+
+  // Tangent at start a: pointing toward w (half of a→w vector).
+  const tax = (w.x - a.x) * alpha;
+  const tay = (w.y - a.y) * alpha;
+
+  // Tangent at end b: pointing away from w (half of w→b vector).
+  const tbx = (b.x - w.x) * alpha;
+  const tby = (b.y - w.y) * alpha;
+
+  // Segment 1: a → w
+  // Cubic control points: (a + tax/3, w - twx/3)
+  const c1x = a.x + tax / 3;
+  const c1y = a.y + tay / 3;
+  const c2x = w.x - twx / 3;
+  const c2y = w.y - twy / 3;
+
+  // Segment 2: w → b
+  // Cubic control points: (w + twx/3, b - tbx/3)
+  const c3x = w.x + twx / 3;
+  const c3y = w.y + twy / 3;
+  const c4x = b.x - tbx / 3;
+  const c4y = b.y - tby / 3;
+
   return (
     `M ${a.x} ${a.y} ` +
-    `C ${c1ax} ${c1ay}, ${w.x} ${w.y}, ${w.x} ${w.y} ` +
-    `C ${w.x} ${w.y}, ${c2bx} ${c2by}, ${b.x} ${b.y}`
+    `C ${c1x} ${c1y}, ${c2x} ${c2y}, ${w.x} ${w.y} ` +
+    `C ${c3x} ${c3y}, ${c4x} ${c4y}, ${b.x} ${b.y}`
   );
 }
 

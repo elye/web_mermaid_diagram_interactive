@@ -123,6 +123,8 @@ function annotateNodes(svg: SVGSVGElement): Set<string> {
 
 /**
  * Tag every edge path with `data-edge-id` + `data-edge-source/target`.
+ * Also inject a wide transparent sibling path `.mf-edge-hit` that acts as
+ * the click/pointer hit area (16 px wide) so thin lines are easy to select.
  * Returns the ids in DOM order so we can match edge labels positionally.
  */
 function annotateEdges(svg: SVGSVGElement, nodeIdSet: ReadonlySet<string>): string[] {
@@ -140,6 +142,22 @@ function annotateEdges(svg: SVGSVGElement, nodeIdSet: ReadonlySet<string>): stri
     if (endpoints) {
       p.setAttribute('data-edge-source', endpoints.source);
       p.setAttribute('data-edge-target', endpoints.target);
+    }
+
+    // Inject a wide transparent hit-area sibling BEFORE the visible path so
+    // it sits underneath (z-order) but still catches pointer events.
+    // Uses `data-hit-edge-id` (not `data-edge-id`) so routeAllEdges and
+    // extractEdges don't process it as a real edge path.
+    // Skip if already injected (idempotent).
+    const existingHit = p.parentElement?.querySelector(
+      `.mf-edge-hit[data-hit-edge-id="${rawId}"]`,
+    );
+    if (!existingHit) {
+      const hit = p.ownerDocument.createElementNS('http://www.w3.org/2000/svg', 'path');
+      hit.setAttribute('class', 'mf-edge-hit');
+      hit.setAttribute('data-hit-edge-id', rawId);
+      hit.setAttribute('d', p.getAttribute('d') ?? '');
+      p.parentElement?.insertBefore(hit, p);
     }
   });
   return idsInOrder;

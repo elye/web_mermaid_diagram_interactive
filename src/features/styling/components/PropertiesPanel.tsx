@@ -20,20 +20,22 @@ function NodePropertiesPanel() {
   const selectedNodeIds = useSelectionStore((s) => s.selectedNodeIds);
   const nodeStyles = useStyleStore((s) => s.nodeStyles);
   const setNodeStyle = useStyleStore((s) => s.setNodeStyle);
+  const clearNodeStyle = useStyleStore((s) => s.clearNodeStyle);
   const commit = useHistoryStore((s) => s.commit);
 
   const firstId = Array.from(selectedNodeIds)[0];
   const current = nodeStyles[firstId] ?? {};
 
-  const applyAll = (patch: StyleOverride) => {
+  /** Apply a single-property patch to all selected nodes. */
+  const applyProp = (patch: StyleOverride) => {
     commit();
     selectedNodeIds.forEach((id) => setNodeStyle(id, patch));
   };
 
-  /** Reset the selected nodes back to Mermaid's default (remove all overrides). */
+  /** Fully remove all overrides — restores Mermaid's default appearance. */
   const resetAll = () => {
     commit();
-    selectedNodeIds.forEach((id) => setNodeStyle(id, {}));
+    selectedNodeIds.forEach((id) => clearNodeStyle(id));
   };
 
   return (
@@ -53,7 +55,7 @@ function NodePropertiesPanel() {
           type="color"
           aria-label="Fill color"
           value={current.fill ?? '#ffffff'}
-          onChange={(e) => applyAll({ fill: e.target.value })}
+          onChange={(e) => applyProp({ fill: e.target.value })}
           className="h-8 w-full cursor-pointer rounded border border-border bg-surface"
         />
       </label>
@@ -64,7 +66,7 @@ function NodePropertiesPanel() {
           type="color"
           aria-label="Stroke color"
           value={current.stroke ?? '#333333'}
-          onChange={(e) => applyAll({ stroke: e.target.value })}
+          onChange={(e) => applyProp({ stroke: e.target.value })}
           className="h-8 w-full cursor-pointer rounded border border-border bg-surface"
         />
       </label>
@@ -79,7 +81,7 @@ function NodePropertiesPanel() {
           max={12}
           step={0.5}
           value={current.strokeWidth ?? 1}
-          onChange={(e) => applyAll({ strokeWidth: Number(e.target.value) })}
+          onChange={(e) => applyProp({ strokeWidth: Number(e.target.value) })}
           className="w-full"
         />
       </label>
@@ -90,7 +92,7 @@ function NodePropertiesPanel() {
           type="color"
           aria-label="Font color"
           value={current.fontColor ?? '#000000'}
-          onChange={(e) => applyAll({ fontColor: e.target.value })}
+          onChange={(e) => applyProp({ fontColor: e.target.value })}
           className="h-8 w-full cursor-pointer rounded border border-border bg-surface"
         />
       </label>
@@ -100,7 +102,7 @@ function NodePropertiesPanel() {
         {NODE_PRESETS.map((preset) => (
           <button
             key={preset.name}
-            onClick={() => applyAll(preset.style)}
+            onClick={() => applyProp(preset.style)}
             className="rounded border border-border px-2 py-1 text-xs hover:bg-surface-alt"
             style={{ background: preset.style.fill, color: preset.style.fontColor }}
             title={preset.name}
@@ -141,6 +143,7 @@ function EdgePropertiesPanel() {
   const selectedEdgeIds = useSelectionStore((s) => s.selectedEdgeIds);
   const edgeStyles = useStyleStore((s) => s.edgeStyles);
   const setEdgeStyle = useStyleStore((s) => s.setEdgeStyle);
+  const clearEdgeStyle = useStyleStore((s) => s.clearEdgeStyle);
   const clearEdgeWaypoints = useDiagramStore((s) => s.clearEdgeWaypoints);
   const clearEdgeAnchorOverrides = useDiagramStore((s) => s.clearEdgeAnchorOverrides);
   const commit = useHistoryStore((s) => s.commit);
@@ -148,7 +151,8 @@ function EdgePropertiesPanel() {
   const firstId = Array.from(selectedEdgeIds)[0];
   const current = edgeStyles[firstId] ?? {};
 
-  const applyAll = (patch: StyleOverride) => {
+  /** Apply a single-property patch to all selected edges. */
+  const applyProp = (patch: StyleOverride) => {
     commit();
     selectedEdgeIds.forEach((id) => setEdgeStyle(id, patch));
   };
@@ -157,17 +161,16 @@ function EdgePropertiesPanel() {
     commit();
     selectedEdgeIds.forEach((id) => {
       setEdgeStyle(id, { lineStyle: style });
-      // Clear waypoints when switching away from curve — they don't apply
-      // to straight/orthogonal and would leave stale state.
+      // Clear waypoints when switching away from curve.
       if (style !== 'curve') clearEdgeWaypoints(id);
     });
   };
 
-  /** Reset the selected edges back to Mermaid's default (remove all overrides). */
+  /** Fully remove all overrides — restores Mermaid's default appearance. */
   const resetAll = () => {
     commit();
     selectedEdgeIds.forEach((id) => {
-      setEdgeStyle(id, {});
+      clearEdgeStyle(id);
       clearEdgeWaypoints(id);
       clearEdgeAnchorOverrides(id);
     });
@@ -216,7 +219,7 @@ function EdgePropertiesPanel() {
           type="color"
           aria-label="Edge stroke color"
           value={current.stroke ?? '#333333'}
-          onChange={(e) => applyAll({ stroke: e.target.value })}
+          onChange={(e) => applyProp({ stroke: e.target.value })}
           className="h-8 w-full cursor-pointer rounded border border-border bg-surface"
         />
       </label>
@@ -231,7 +234,7 @@ function EdgePropertiesPanel() {
           max={10}
           step={0.5}
           value={current.strokeWidth ?? 2}
-          onChange={(e) => applyAll({ strokeWidth: Number(e.target.value) })}
+          onChange={(e) => applyProp({ strokeWidth: Number(e.target.value) })}
           className="w-full"
         />
       </label>
@@ -242,7 +245,7 @@ function EdgePropertiesPanel() {
           {DASH_OPTIONS.map((opt) => (
             <button
               key={opt.label}
-              onClick={() => applyAll({ dashArray: opt.value })}
+              onClick={() => applyProp({ dashArray: opt.value })}
               className={`rounded border px-2 py-1 text-xs ${
                 (current.dashArray ?? '') === opt.value
                   ? 'border-accent bg-accent/10 text-accent'

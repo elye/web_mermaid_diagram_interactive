@@ -299,8 +299,16 @@ function injectEdgeHandles(host: HTMLElement): void {
       }
     }
 
-    // Insert handles group after the path in the DOM.
-    path.parentElement?.insertBefore(g, path.nextSibling);
+    // Append the handles group to the SVG root (or the nearest <g> that
+    // contains both edgePaths and edgeLabels) so it always paints on top of
+    // edge labels.  Edge labels use pointer-events:none (set in CSS) so
+    // they don't block the handles.
+    const svgRoot = path.ownerSVGElement ?? path.parentElement?.closest('svg');
+    if (svgRoot) {
+      svgRoot.appendChild(g);
+    } else {
+      path.parentElement?.insertBefore(g, path.nextSibling);
+    }
   });
 }
 

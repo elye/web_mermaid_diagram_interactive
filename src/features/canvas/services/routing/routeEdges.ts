@@ -119,14 +119,26 @@ function routeSingleEdge(
 
   // Choose path shape based on line style.
   const style = lineStyle ?? 'curve';
+  let d: string;
   if (style === 'straight') {
-    path.setAttribute('d', straightPath(a, b));
+    d = straightPath(a, b);
   } else if (style === 'orthogonal') {
-    path.setAttribute('d', orthogonalPath(a, b));
+    d = orthogonalPath(a, b);
   } else {
     // 'curve' — use waypoint if available, else standard bezier.
     const w = waypoints?.[0];
-    path.setAttribute('d', w ? waypointCurvePath(a, w, b) : bezierPath(a, b));
+    d = w ? waypointCurvePath(a, w, b) : bezierPath(a, b);
+  }
+  path.setAttribute('d', d);
+
+  // Keep the wide transparent hit-area sibling in sync.
+  const edgeId = path.getAttribute('data-edge-id');
+  if (edgeId) {
+    const escaped = edgeId.replace(/["\\]/g, '\\$&');
+    const hit = path.parentElement?.querySelector<SVGPathElement>(
+      `.mf-edge-hit[data-hit-edge-id="${escaped}"]`,
+    );
+    if (hit) hit.setAttribute('d', d);
   }
 }
 

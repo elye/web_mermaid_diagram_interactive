@@ -121,7 +121,10 @@ export function DiagramCanvas() {
       p.style.strokeWidth = style.strokeWidth != null ? `${style.strokeWidth}px` : '';
       p.style.strokeDasharray = style.dashArray ?? '';
     });
-  }, [nodeStyles, edgeStyles, svg]);
+  // Re-run when selection changes too — selection CSS uses class rules which
+  // would be overridden by inline styles only if the inline styles are present.
+  // Re-applying here ensures strokeWidth overrides are always in DOM.
+  }, [nodeStyles, edgeStyles, svg, selectedNodeIds, selectedEdgeIds]);
 
   // Wire edge click → selectEdge. Mounted whenever the SVG changes so
   // newly rendered edges are always covered.
@@ -130,9 +133,17 @@ export function DiagramCanvas() {
     if (!host) return;
     const handleEdgeClick = (e: MouseEvent) => {
       const target = e.target as Element | null;
-      const path = target?.closest('path[data-edge-id]') as SVGPathElement | null;
-      if (!path) return;
-      const id = path.getAttribute('data-edge-id');
+      // Accept clicks on both the visible path and the wide hit-area sibling.
+      // The hit path uses data-hit-edge-id; the real path uses data-edge-id.
+      if (target?.closest('.mf-edge-handles')) return;
+      let id: string | null = null;
+      const hitPath = target?.closest('.mf-edge-hit') as SVGPathElement | null;
+      if (hitPath) {
+        id = hitPath.getAttribute('data-hit-edge-id');
+      } else {
+        const realPath = target?.closest('path[data-edge-id]') as SVGPathElement | null;
+        id = realPath?.getAttribute('data-edge-id') ?? null;
+      }
       if (!id) return;
       e.stopPropagation();
       useSelectionStore.getState().selectEdge(id, e.shiftKey);
