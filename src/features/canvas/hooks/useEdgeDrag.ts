@@ -48,6 +48,12 @@ const HANDLE_RADIUS = 6;
 const ANCHOR_HANDLE_RADIUS = 5;
 const HANDLE_CLASS = 'mf-edge-handle';
 const HANDLES_GROUP_CLASS = 'mf-edge-handles';
+/**
+ * Minimum pointer travel (in screen pixels) before a waypoint interaction is
+ * treated as a drag. Below this we treat it as a click — the waypoint
+ * position doesn't change and no new subdivision handles are inserted.
+ */
+const DRAG_THRESHOLD_PX = 4;
 
 // ─── Public hook ──────────────────────────────────────────────────────────────
 
@@ -94,6 +100,9 @@ export function useEdgeDrag(svgHostRef: React.RefObject<HTMLElement>, deps?: unk
           svgEl,
           waypointIndex: Number(handle.getAttribute('data-waypoint-index') ?? 0),
           pointerId: e.pointerId,
+          startClientX: e.clientX,
+          startClientY: e.clientY,
+          moved: false,
         };
       } else {
         // anchor drag
@@ -116,6 +125,18 @@ export function useEdgeDrag(svgHostRef: React.RefObject<HTMLElement>, deps?: unk
 
     const onPointerMove = (e: PointerEvent) => {
       if (!dragCtx) return;
+
+      // Latch "moved" once the pointer travels past the click/drag threshold.
+      if (dragCtx.kind === 'waypoint' && !dragCtx.moved) {
+        const dx = e.clientX - dragCtx.startClientX;
+        const dy = e.clientY - dragCtx.startClientY;
+        if (Math.hypot(dx, dy) >= DRAG_THRESHOLD_PX) {
+          dragCtx.moved = true;
+        } else {
+          // Below threshold — don't visually move the handle or reroute yet.
+          return;
+        }
+      }
 
       const { svgEl, handle } = dragCtx;
       const pt = svgPoint(svgEl, e.clientX, e.clientY);
@@ -140,6 +161,9 @@ export function useEdgeDrag(svgHostRef: React.RefObject<HTMLElement>, deps?: unk
           waypoints: waypointMap,
           anchorOverrides: new Map(Object.entries(edgeAnchorOverrides)),
         });
+        // Miro-style inverse-solve: with quadratic (1 waypoint) or cubic
+        // (2 waypoint) Bezier, sibling waypoints remain ON the curve at
+        // their stored positions — no need to reposition sibling handles.
       } else {
         // anchor drag — snap to node perimeter and reroute
         const { edgeId, role, nodeId } = dragCtx;
@@ -173,6 +197,16 @@ export function useEdgeDrag(svgHostRef: React.RefObject<HTMLElement>, deps?: unk
       const { edgeId, svgEl, handle } = dragCtx;
 
       if (dragCtx.kind === 'waypoint') {
+        // Click (no meaningful movement) — do nothing: leave stored waypoints
+        // untouched and do NOT insert subdivision handles. The user has to
+        // actually drag the dot to reshape the curve.
+        if (!dragCtx.moved) {
+          dragCtx = null;
+          window.removeEventListener('pointermove', onPointerMove);
+          window.removeEventListener('pointerup', onPointerUp);
+          return;
+        }
+
         const finalX = Number(handle.getAttribute('cx'));
         const finalY = Number(handle.getAttribute('cy'));
         const droppedPt = { x: finalX, y: finalY };
@@ -180,43 +214,13 @@ export function useEdgeDrag(svgHostRef: React.RefObject<HTMLElement>, deps?: unk
 
         const storeState = useDiagramStore.getState();
         const existing = [...(storeState.edgeWaypoints[edgeId] ?? [])];
-        // Update the dragged waypoint position.
+        // Miro-style: dragging a waypoint just updates its position.
+        // No sibling subdivision handles are inserted — the curve is
+        // already determined by the (few) existing waypoints via
+        // `waypointBezierPath` (quadratic / cubic inverse-solve).
         existing[idx] = droppedPt;
 
-        // ── Subdivision: insert midpoint handles on each side ──────────────
-        // Find the "neighbor" points flanking this waypoint (either another
-        // waypoint or the source/target anchor endpoint).
-        const path = svgEl.querySelector<SVGPathElement>(
-          `path[data-edge-id="${cssEscape(edgeId)}"]`,
-        );
-        const beforePt: Point | null =
-          idx > 0
-            ? existing[idx - 1]
-            : (path
-                ? getEdgeAnchorPoint(svgEl, path, 'source', storeState)
-                : null);
-        const afterPt: Point | null =
-          idx < existing.length - 1
-            ? existing[idx + 1]
-            : (path
-                ? getEdgeAnchorPoint(svgEl, path, 'target', storeState)
-                : null);
-
-        // Build the new waypoints array with two midpoints spliced around
-        // the dragged point.
-        const next: typeof existing = [];
-        // Keep everything before dragged index.
-        for (let i = 0; i < idx; i++) next.push(existing[i]);
-        // Midpoint between previous neighbour and dragged point.
-        if (beforePt) next.push(midPt(beforePt, droppedPt));
-        // The dragged point itself.
-        next.push(droppedPt);
-        // Midpoint between dragged point and next neighbour.
-        if (afterPt) next.push(midPt(droppedPt, afterPt));
-        // Keep everything after dragged index.
-        for (let i = idx + 1; i < existing.length; i++) next.push(existing[i]);
-
-        useDiagramStore.getState().setEdgeWaypoints(edgeId, next);
+        useDiagramStore.getState().setEdgeWaypoints(edgeId, existing);
       } else {
         // anchor drag
         const { role, nodeId } = dragCtx;
@@ -291,13 +295,20 @@ function injectEdgeHandles(host: HTMLElement): void {
     g.setAttribute('class', HANDLES_GROUP_CLASS);
     g.setAttribute('data-edge-id', id);
 
-    // ── Waypoint handles (curve mode only) ──────────────────────────────
-    if (lineStyle === 'curve') {
+    // Read source/target ids up-front — used by both waypoint and anchor blocks.
+    const srcId = path.getAttribute('data-edge-source');
+    const tgtId = path.getAttribute('data-edge-target');
+
+    // ── Waypoint handles (curve mode + self-loops) ──────────────────────
+    const isSelfLoop = srcId !== null && srcId === tgtId;
+    if (lineStyle === 'curve' || isSelfLoop) {
       if (waypts.length > 0) {
         waypts.forEach((wp, i) => {
           g.appendChild(makeWaypointHandle(id, wp.x, wp.y, i));
         });
       } else {
+        // Use the actual geometric midpoint of the rendered path so the
+        // handle starts exactly on the line.
         const mid = pathMidpoint(path);
         if (mid) {
           g.appendChild(makeWaypointHandle(id, mid.x, mid.y, 0));
@@ -306,8 +317,6 @@ function injectEdgeHandles(host: HTMLElement): void {
     }
 
     // ── Anchor handles (all modes, selected edges only) ──────────────────
-    const srcId = path.getAttribute('data-edge-source');
-    const tgtId = path.getAttribute('data-edge-target');
 
     if (srcId) {
       const srcG = svgEl.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(srcId)}"]`);
@@ -422,6 +431,11 @@ interface WaypointDragCtx {
   svgEl: SVGSVGElement;
   waypointIndex: number;
   pointerId: number;
+  /** Screen-space pointer position when the drag started. */
+  startClientX: number;
+  startClientY: number;
+  /** True once pointer has moved beyond DRAG_THRESHOLD_PX from start. */
+  moved: boolean;
 }
 
 interface AnchorDragCtx {
@@ -463,45 +477,4 @@ function buildLineStyleMap(
 
 function cssEscape(v: string): string {
   return v.replace(/["\\]/g, '\\$&');
-}
-
-/** Midpoint between two points. */
-function midPt(a: Point, b: Point): Point {
-  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-}
-
-/**
- * Resolve the current computed anchor point (source or target) for an edge.
- * Used at waypoint-drag-end to find the neighbour points for subdivision.
- */
-function getEdgeAnchorPoint(
-  svgEl: SVGSVGElement,
-  path: SVGPathElement,
-  role: 'source' | 'target',
-  storeState: ReturnType<typeof useDiagramStore.getState>,
-): Point | null {
-  const nodeId = path.getAttribute(role === 'source' ? 'data-edge-source' : 'data-edge-target');
-  if (!nodeId) return null;
-  const g = svgEl.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nodeId)}"]`);
-  if (!g) return null;
-  const rect = groupBBox(g);
-  if (!rect) return null;
-
-  const edgeId = path.getAttribute('data-edge-id');
-  const override = edgeId
-    ? storeState.edgeAnchorOverrides[edgeId]?.[role]
-    : undefined;
-
-  if (override) return anchorOnSide(rect, override);
-
-  // Compute auto-anchor toward the opposite node.
-  const otherId = path.getAttribute(
-    role === 'source' ? 'data-edge-target' : 'data-edge-source',
-  );
-  if (!otherId) return centerOf(rect);
-  const otherG = svgEl.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(otherId)}"]`);
-  if (!otherG) return centerOf(rect);
-  const otherRect = groupBBox(otherG);
-  if (!otherRect) return centerOf(rect);
-  return anchorOn(rect, centerOf(otherRect));
 }

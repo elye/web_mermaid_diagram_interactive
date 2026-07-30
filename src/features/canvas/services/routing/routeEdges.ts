@@ -21,7 +21,7 @@
 import type { BBox, EdgeLineStyle, EdgeWaypoint, EdgeAnchorOverride } from '@/shared/types/diagram';
 import { groupBBox, fallbackBBox, pathEndpoints, pathMidpoint } from '../svg';
 import { anchorOn, anchorOnSide, centerOf } from './anchors';
-import { bezierPath, straightPath, orthogonalPath, catmullRomPath, selfLoopPath } from './paths';
+import { bezierPath, straightPath, orthogonalPath, waypointBezierPath, selfLoopPath } from './paths';
 import { nearestNodeId } from './endpointInference';
 
 export interface RouteOptions {
@@ -104,8 +104,19 @@ function routeSingleEdge(
   if (!srcRect || !tgtRect) return;
 
   // Self-loop: draw a small kidney on the right side of the node.
+  // Honour any user waypoint so the loop can be reshaped by drag.
   if (src && tgt && src === tgt) {
-    path.setAttribute('d', selfLoopPath(srcRect));
+    const loopD = selfLoopPath(srcRect, waypoints?.[0]);
+    path.setAttribute('d', loopD);
+    // Keep hit-area in sync.
+    const edgeIdSelf = path.getAttribute('data-edge-id');
+    if (edgeIdSelf) {
+      const escapedSelf = edgeIdSelf.replace(/["\\]/g, '\\$&');
+      const hitSelf = path.parentElement?.querySelector<SVGPathElement>(
+        `.mf-edge-hit[data-hit-edge-id="${escapedSelf}"]`,
+      );
+      if (hitSelf) hitSelf.setAttribute('d', loopD);
+    }
     return;
   }
 
@@ -125,9 +136,10 @@ function routeSingleEdge(
   } else if (style === 'orthogonal') {
     d = orthogonalPath(a, b);
   } else {
-    // 'curve' — Catmull-Rom through all waypoints if any, else standard bezier.
+    // 'curve' — anchor-aware cubic Bezier through all waypoints if any,
+    // else standard S-curve bezier.
     if (waypoints && waypoints.length > 0) {
-      d = catmullRomPath(a, waypoints, b);
+      d = waypointBezierPath(a, waypoints, b, srcRect, tgtRect);
     } else {
       d = bezierPath(a, b);
     }

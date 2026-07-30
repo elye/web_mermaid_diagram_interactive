@@ -136,19 +136,205 @@ function fmt(n: number): string {
 }
 
 /**
+ * Waypoint curve — chain the same `bezierPath` used for the initial line
+ * between each pair of consecutive knots `[src, w0, w1, …, tgt]`.
+ *
+ * Each half looks exactly like the initial no-waypoint line (an axis-aware
+ * cubic S-curve produced by `bezierPath`), just split at the waypoint(s).
+ *
+ * With 1 waypoint `W` between `src` and `tgt`:
+ *   half 1: bezierPath(src, W)   — one cubic Bezier
+ *   half 2: bezierPath(W, tgt)   — one cubic Bezier
+ * → concatenated `M src.x src.y  C … W  C … tgt`.
+ *
+ * `bezierPath` picks a horizontal or vertical axis for each half based on
+ * that half's own dx/dy — so if the waypoint sits directly above the
+ * target (making the second half nearly vertical), the second half
+ * naturally exits vertically. If the waypoint is collinear with src/tgt
+ * on the axis, each half degenerates into a straight-looking cubic.
+ *
+ * • 0 waypoints  → `bezierPath(a, b)` directly (default S-curve).
+ * • N waypoints  → N+1 chained cubic Béziers.
+ *
+ * The `srcRect`/`tgtRect` args are unused by this algorithm; the
+ * signature is preserved for router compatibility.
+ *
+ * @param a          Source anchor point.
+ * @param waypoints  Ordered user waypoints between `a` and `b`.
+ * @param b          Target anchor point.
+ */
+export function waypointBezierPath(
+  a: Point,
+  waypoints: Point[],
+  b: Point,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _srcRect: BBox,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _tgtRect: BBox,
+): string {
+  if (waypoints.length === 0) return bezierPath(a, b);
+  return chainedBezierPath(a, waypoints, b);
+}
+
+/**
+ * Chain cubic Béziers between consecutive knots with C1 continuity at
+ * every interior waypoint — so the two halves join smoothly, no kink.
+ *
+ * Model:
+ *   knots  = [src, w0, w1, …, tgt]
+ *   For each interior knot K[i], we compute a shared tangent direction
+ *   T[i] = unit(K[i+1] − K[i-1])          (Catmull-Rom style)
+ *   For endpoints (src, tgt), we reuse `bezierPath`'s axis-aware tangent
+ *   direction so the FIRST and LAST halves still exit/enter the anchor
+ *   just like the initial no-waypoint line.
+ *
+ * For each segment K[i] → K[i+1]:
+ *   bend = clamp(|K[i+1] − K[i]| · 0.4, 30, 120)
+ *   cp1  = K[i]   + T[i]   · bend
+ *   cp2  = K[i+1] − T[i+1] · bend
+ *
+ * Because both halves that meet at an interior knot K use the SAME
+ * tangent direction T[K] (one leaves along +T, next arrives along −(−T)),
+ * their control points are colinear through K → C1 continuous → smooth.
+ *
+ * For the trivial 0-waypoint case, this reduces to exactly `bezierPath`.
+ */
+function chainedBezierPath(src: Point, waypoints: Point[], tgt: Point): string {
+  const knots: Point[] = [src, ...waypoints, tgt];
+  const n = knots.length;
+
+  // Per-knot outgoing tangent direction (unit vector).
+  const tan: Point[] = new Array(n);
+
+  // Interior tangents: unit(next - prev) — Catmull-Rom style. Guarantees
+  // the two halves that meet at K share this direction → C1 continuity.
+  for (let i = 1; i < n - 1; i++) {
+    const prev = knots[i - 1];
+    const next = knots[i + 1];
+    const dx = next.x - prev.x;
+    const dy = next.y - prev.y;
+    const len = Math.hypot(dx, dy) || 1;
+    tan[i] = { x: dx / len, y: dy / len };
+  }
+
+  // Endpoint tangents: reuse `bezierPath`'s axis-aware direction so the
+  // first/last halves preserve the initial-line look (horizontal S-curve
+  // for wide edges, vertical S-curve for tall edges).
+  tan[0] = anchorTangent(knots[0], knots[1]);
+  tan[n - 1] = anchorTangent(knots[n - 1], knots[n - 2]);
+  // Note: the last tangent points FROM tgt TO its previous knot; we
+  // want the outgoing direction leaving `tgt` backwards, so flip it so
+  // that cp2 = tgt − T[n-1]·bend lands in front of tgt (toward prev).
+  // Because we pass (tgt, prev) to anchorTangent it already returns the
+  // direction pointing from tgt toward prev — that's what we want here
+  // since the segment enters tgt from prev's side.
+
+  let d = `M ${fmt(knots[0].x)} ${fmt(knots[0].y)}`;
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = knots[i];
+    const p1 = knots[i + 1];
+    const dx = p1.x - p0.x;
+    const dy = p1.y - p0.y;
+    const bend = Math.max(30, Math.min(120, Math.hypot(dx, dy) * 0.4));
+
+    // cp1 leaves p0 along its outgoing tangent.
+    // cp2 arrives at p1 along the INVERSE of p1's tangent (walk backward
+    // from p1 toward the segment). For interior p1, tan[p1] points along
+    // (next − prev), which is roughly toward `next`; walking backward
+    // gives us `− tan[p1]`. For the endpoint case, tan[n-1] already
+    // points from tgt toward prev, so we ADD instead of subtract.
+    const cp1x = p0.x + tan[i].x * bend;
+    const cp1y = p0.y + tan[i].y * bend;
+
+    let cp2x: number;
+    let cp2y: number;
+    if (i + 1 === n - 1) {
+      // Last segment: tan[n-1] points from tgt toward prev already.
+      cp2x = p1.x + tan[i + 1].x * bend;
+      cp2y = p1.y + tan[i + 1].y * bend;
+    } else {
+      // Interior knot: flip its tangent to walk backward into segment.
+      cp2x = p1.x - tan[i + 1].x * bend;
+      cp2y = p1.y - tan[i + 1].y * bend;
+    }
+
+    d += ` C ${fmt(cp1x)} ${fmt(cp1y)}, ${fmt(cp2x)} ${fmt(cp2y)}, ${fmt(p1.x)} ${fmt(p1.y)}`;
+  }
+  return d;
+}
+
+/**
+ * Direction used by `bezierPath` to leave anchor `a` heading toward `b`.
+ * Returns a unit vector along either the ±x or ±y axis (whichever
+ * dominates), matching `bezierPath`'s horizontal-vs-vertical split.
+ */
+function anchorTangent(a: Point, b: Point): Point {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const horizontal = Math.abs(dx) >= Math.abs(dy);
+  if (horizontal) {
+    return { x: Math.sign(dx) || 1, y: 0 };
+  }
+  return { x: 0, y: Math.sign(dy) || 1 };
+}
+
+/**
+ * Public: single-quadratic-through-a-point helper.
+ *
+ * Kept for possible external use / tests. Not used by `waypointBezierPath`
+ * any more — the new algorithm chains `bezierPath` between each pair of
+ * consecutive knots (see `chainedBezierPath`).
+ */
+export function quadraticThroughPoint(p0: Point, m: Point, p2: Point): string {
+  const cp: Point = {
+    x: 2 * m.x - 0.5 * (p0.x + p2.x),
+    y: 2 * m.y - 0.5 * (p0.y + p2.y),
+  };
+  return `M ${fmt(p0.x)} ${fmt(p0.y)} Q ${fmt(cp.x)} ${fmt(cp.y)}, ${fmt(p2.x)} ${fmt(p2.y)}`;
+}
+
+/**
+ * Public: single cubic Bézier passing through m1 (t=1/3) and m2 (t=2/3).
+ * Not used by `waypointBezierPath` any more; retained for reference/tests.
+ */
+export function cubicThroughTwoPoints(p0: Point, m1: Point, m2: Point, p3: Point): string {
+  const ux = 27 * m1.x - 8 * p0.x -     p3.x;
+  const uy = 27 * m1.y - 8 * p0.y -     p3.y;
+  const vx = 27 * m2.x -     p0.x - 8 * p3.x;
+  const vy = 27 * m2.y -     p0.y - 8 * p3.y;
+
+  const cp1: Point = { x: (2 * ux - vx) / 18, y: (2 * uy - vy) / 18 };
+  const cp2: Point = { x: (2 * vx - ux) / 18, y: (2 * vy - uy) / 18 };
+
+  return (
+    `M ${fmt(p0.x)} ${fmt(p0.y)}` +
+    ` C ${fmt(cp1.x)} ${fmt(cp1.y)},` +
+    ` ${fmt(cp2.x)} ${fmt(cp2.y)},` +
+    ` ${fmt(p3.x)} ${fmt(p3.y)}`
+  );
+}
+
+/**
  * Kidney-shaped self-loop anchored on the RIGHT side of the given rect.
  * Used for edges whose source and target are the same node (`D --> D`).
  *
- * The loop starts slightly above the right midpoint, swings out by
- * `~0.7 * rect.height` (clamped to [20, 40]), and comes back slightly
- * below. Always attached to the rect so it stays glued during drags.
+ * If `waypoint` is supplied the loop is routed through it (the user dragged
+ * the midpoint handle), producing an arbitrary curve while keeping both
+ * endpoints glued to the node.
  */
-export function selfLoopPath(rect: BBox): string {
+export function selfLoopPath(rect: BBox, waypoint?: Point): string {
   const cy = rect.y + rect.height / 2;
   const rightX = rect.x + rect.width;
   const size = Math.max(20, Math.min(40, rect.height * 0.7));
   const start: Point = { x: rightX, y: cy - size * 0.25 };
   const end: Point = { x: rightX, y: cy + size * 0.25 };
+
+  if (waypoint) {
+    // Route through the user-placed waypoint using Miro-style quadratic
+    // Bezier (the waypoint is the exact drag point on the curve).
+    return quadraticThroughPoint(start, waypoint, end);
+  }
+
   const outX = rightX + size;
   return `M ${start.x} ${start.y} C ${outX} ${cy - size}, ${outX} ${cy + size}, ${end.x} ${end.y}`;
 }
