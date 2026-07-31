@@ -21,6 +21,7 @@ import { useSelectionStore } from '@/stores/selectionStore';
 import { useHistoryStore } from '@/stores/historyStore';
 import { useUiStore } from '@/stores/uiStore';
 import { routeAllEdges, expandViewBoxToFit } from '../services/edgeRouter';
+import { resizeClusters } from '../services/clusterResize';
 
 interface DragTarget {
   id: string;
@@ -118,6 +119,8 @@ export function useNodeDrag(svgHostRef: React.RefObject<HTMLElement>) {
         waypoints: new Map(Object.entries(edgeWaypoints)),
         anchorOverrides: new Map(Object.entries(edgeAnchorOverrides)),
       });
+      // Resize subgraph cluster rectangles to keep wrapping their members.
+      resizeClusters(ctx.svg, useDiagramStore.getState().source);
       expandViewBoxToFit(ctx.svg);
     };
 

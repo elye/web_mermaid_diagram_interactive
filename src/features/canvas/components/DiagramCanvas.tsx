@@ -13,6 +13,7 @@ import { useCanvasInteraction } from '../hooks/useCanvasInteraction';
 import { useNodeDrag } from '../hooks/useNodeDrag';
 import { useEdgeDrag } from '../hooks/useEdgeDrag';
 import { routeAllEdges, expandViewBoxToFit } from '../services/edgeRouter';
+import { resizeClusters } from '../services/clusterResize';
 import type { EdgeLineStyle } from '@/shared/types/diagram';
 
 export function DiagramCanvas() {
@@ -89,6 +90,8 @@ export function DiagramCanvas() {
     });
 
     routeAllEdges(svgEl, { lineStyles: lineStyleMap, waypoints: waypointMap, anchorOverrides: anchorOverrideMap });
+    // Resize subgraph cluster rectangles after position overrides are applied.
+    resizeClusters(svgEl, useDiagramStore.getState().source);
     expandViewBoxToFit(svgEl);
   }, [positionOverrides, svg, lineStyleMap, waypointMap, anchorOverrideMap]);
 
