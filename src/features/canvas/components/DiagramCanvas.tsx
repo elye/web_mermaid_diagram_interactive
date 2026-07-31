@@ -101,8 +101,20 @@ export function DiagramCanvas() {
   // so that when an override is removed (reset) the inline styles are explicitly
   // cleared back to '' — letting Mermaid's default styles take over immediately.
   //
-  // For selected edges we also apply the accent colour inline (so there's no
-  // dependency on !important CSS rules, which would block user overrides).
+  // Selection is intentionally NEVER expressed by overriding stroke color here
+  // — doing so used to hide the user's own preset/custom stroke color (e.g.
+  // applying "Error" to a selected node still looked like nothing happened,
+  // because the accent color replaced the preset's red border). The selection
+  // ring is drawn via the `.mf-node--selected` / `.mf-edge--selected` CSS
+  // filter classes instead (see globals.css), which never touches `stroke`.
+  //
+  // Overrides are applied with `!important`: Mermaid's `classDef`/`class`
+  // directive (very common in real-world diagrams) emits its own CSS rules
+  // with `!important` (e.g. `.src>* { fill: ... !important; }`), which would
+  // otherwise silently beat a plain inline style — the panel would show the
+  // new color while the canvas kept rendering the classDef color. `!important`
+  // inline styles beat `!important` stylesheet rules, so this makes overrides
+  // win regardless of whether the node has a Mermaid class applied.
   useEffect(() => {
     const host = svgHostRef.current;
     if (!host) return;
@@ -114,23 +126,21 @@ export function DiagramCanvas() {
       const isSelected = selectedNodeIds.has(id);
 
       g.querySelectorAll<SVGElement>('rect, polygon, circle, ellipse, path').forEach((shape) => {
-        shape.style.fill = style.fill ?? '';
-        // Selected: show accent stroke. Honour user's strokeWidth if set, else 2.5px.
-        shape.style.stroke = isSelected
-          ? `var(--mf-accent, #0ea5e9)`
-          : (style.stroke ?? '');
-        shape.style.strokeWidth =
-          style.strokeWidth != null
-            ? `${style.strokeWidth}px`
-            : isSelected
-              ? '2.5px'
-              : '';
+        setImportantStyle(shape, 'fill', style.fill ?? '');
+        setImportantStyle(shape, 'stroke', style.stroke ?? '');
+        // Selection bumps stroke width for extra visual weight, but never
+        // touches color — honour the user's own strokeWidth if set.
+        setImportantStyle(
+          shape,
+          'stroke-width',
+          style.strokeWidth != null ? `${style.strokeWidth}px` : isSelected ? '2.5px' : '',
+        );
       });
 
       const text = g.querySelector('text, .nodeLabel') as HTMLElement | null;
       if (text) {
-        text.style.color = style.fontColor ?? '';
-        text.style.fontSize = style.fontSize != null ? `${style.fontSize}px` : '';
+        setImportantStyle(text, 'color', style.fontColor ?? '');
+        setImportantStyle(text, 'font-size', style.fontSize != null ? `${style.fontSize}px` : '');
       }
     });
 
@@ -140,17 +150,13 @@ export function DiagramCanvas() {
       const style = edgeStyles[id] ?? {};
       const isSelected = selectedEdgeIds.has(id);
 
-      // Selected: accent colour; honour user's strokeWidth if set, else 3px default.
-      p.style.stroke = isSelected
-        ? `var(--mf-accent, #0ea5e9)`
-        : (style.stroke ?? '');
-      p.style.strokeWidth =
-        style.strokeWidth != null
-          ? `${style.strokeWidth}px`
-          : isSelected
-            ? '3px'
-            : '';
-      p.style.strokeDasharray = style.dashArray ?? '';
+      setImportantStyle(p, 'stroke', style.stroke ?? '');
+      setImportantStyle(
+        p,
+        'stroke-width',
+        style.strokeWidth != null ? `${style.strokeWidth}px` : isSelected ? '3px' : '',
+      );
+      setImportantStyle(p, 'stroke-dasharray', style.dashArray ?? '');
     });
   }, [nodeStyles, edgeStyles, svg, selectedNodeIds, selectedEdgeIds]);
 
@@ -226,4 +232,20 @@ export function DiagramCanvas() {
 
 function cssEscape(v: string): string {
   return v.replace(/["\\]/g, '\\$&');
+}
+
+/**
+ * Set (or clear, when `value` is `''`) an inline style property with
+ * `!important` priority. Mermaid's `classDef`/`class` directive emits its
+ * own `!important` CSS rules (e.g. `.src>* { fill: ...!important; }`), so a
+ * plain (non-important) inline style would silently lose to it. Clearing
+ * uses `removeProperty` so Mermaid's own styling (classDef or default) wins
+ * again once there's no override.
+ */
+function setImportantStyle(el: SVGElement | HTMLElement, prop: string, value: string): void {
+  if (value) {
+    el.style.setProperty(prop, value, 'important');
+  } else {
+    el.style.removeProperty(prop);
+  }
 }

@@ -61,16 +61,13 @@ body {
   cursor: grabbing;
   filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.25));
 }
-/* Selection ring: uses outline-style box-shadow so it never overrides user
-   stroke/strokeWidth inline styles. We achieve a visible ring via a CSS
-   filter instead of changing stroke-width. */
-.mf-node--selected > rect,
-.mf-node--selected > polygon,
-.mf-node--selected > circle,
-.mf-node--selected > ellipse,
-.mf-node--selected > path {
-  stroke: var(--mf-accent);
-  stroke-width: 2.5px;
+/* Selection ring: a stacked drop-shadow filter (never a stroke override),
+   so a node's own preset/custom stroke color always stays visible even
+   while selected. Mirrors `.mf-edge--selected` below. */
+.mf-node--selected {
+  filter:
+    drop-shadow(0 0 1.5px var(--mf-accent))
+    drop-shadow(0 0 4px var(--mf-accent));
 }
 
 /* ── Edge interaction ─────────────────────────────────────────────────────── */

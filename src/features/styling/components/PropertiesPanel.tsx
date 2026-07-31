@@ -42,7 +42,7 @@ function NodePropertiesPanel() {
     <aside
       role="region"
       aria-label="Node properties"
-      className="absolute right-3 top-3 z-10 w-56 rounded-md border border-border bg-surface p-3 text-sm shadow-md"
+      className="z-10 h-full w-56 flex-shrink-0 overflow-y-auto border-l border-border bg-surface p-3 text-sm shadow-md"
     >
       <div className="mb-2 flex items-center justify-between">
         <h2 className="font-semibold">Node Properties</h2>
@@ -180,7 +180,7 @@ function EdgePropertiesPanel() {
     <aside
       role="region"
       aria-label="Edge properties"
-      className="absolute right-3 top-3 z-10 w-56 rounded-md border border-border bg-surface p-3 text-sm shadow-md"
+      className="z-10 h-full w-56 flex-shrink-0 overflow-y-auto border-l border-border bg-surface p-3 text-sm shadow-md"
     >
       <div className="mb-2 flex items-center justify-between">
         <h2 className="font-semibold">Edge Properties</h2>
