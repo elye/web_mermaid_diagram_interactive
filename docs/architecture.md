@@ -268,6 +268,17 @@ undo keystroke.
   `edgeWaypoints`. The dep list now includes it, so any store-level change
   (undo, redo, file load, autosave restore) re-injects the handles at the
   new coordinates.
+- **`commitCoalesced(key)`** — used by `PropertiesPanel` for controls that
+  fire many events per logical edit (stroke-width slider drag, rapid preset
+  clicks). Only the first call for a given `key` (the selected node/edge id
+  set) pushes a history entry; later same-key calls within an 800ms idle
+  window just extend it. This keeps "drag a slider" or "click through a few
+  presets on the same node" a single undo step instead of one per tick. A
+  plain `commit()` (drag, reset-all, file load) always closes any pending
+  coalesce session first, so the next edit starts fresh.
+- The toolbar's Undo/Redo buttons are `disabled` when `past`/`future` are
+  empty (`useHistoryStore((s) => s.past.length > 0)`), so there's no
+  visually-active button that's actually a no-op.
 
 ## Design invariants
 

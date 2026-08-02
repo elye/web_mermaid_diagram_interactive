@@ -19,6 +19,8 @@ export function Toolbar() {
   const pushToast = useUiStore((s) => s.pushToast);
   const undo = useHistoryStore((s) => s.undo);
   const redo = useHistoryStore((s) => s.redo);
+  const canUndo = useHistoryStore((s) => s.past.length > 0);
+  const canRedo = useHistoryStore((s) => s.future.length > 0);
   const resetStyles = useStyleStore((s) => s.reset);
   const clearPositionOverrides = useDiagramStore((s) => s.clearPositionOverrides);
 
@@ -82,8 +84,8 @@ export function Toolbar() {
         </h1>
       </div>
       <div className="flex items-center gap-1">
-        <Button onClick={undo} title="Undo (⌘Z)">Undo</Button>
-        <Button onClick={redo} title="Redo (⌘⇧Z)">Redo</Button>
+        <Button onClick={undo} disabled={!canUndo} title="Undo (⌘Z)">Undo</Button>
+        <Button onClick={redo} disabled={!canRedo} title="Redo (⌘⇧Z)">Redo</Button>
         <Button onClick={resetAll} title="Reset all style and position overrides back to Mermaid defaults">↺ Reset All</Button>
         <span className="mx-1 h-5 w-px bg-border" />
         <Button onClick={save} title="Save (⌘S)">Save</Button>

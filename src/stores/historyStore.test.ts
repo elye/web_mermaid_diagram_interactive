@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { useDiagramStore } from './diagramStore';
 import { useStyleStore } from './styleStore';
 import { useHistoryStore } from './historyStore';
@@ -109,10 +109,78 @@ describe('historyStore', () => {
     });
 
     useHistoryStore.getState().undo();
-    expect(useDiagramStore.getState().edgeWaypoints).toEqual({ e1: [{ x: 1, y: 1 }] });
+    expect(useDiagramStore.getState().edgeWaypoints.e1).toEqual([{ x: 1, y: 1 }]);
     expect(useDiagramStore.getState().edgeAnchorOverrides.e1).toEqual({
       source: { side: 'left', offset: 0.5 },
     });
     expect(useStyleStore.getState().edgeStyles.e1.stroke).toBe('#123');
+  });
+});
+
+describe('historyStore — commitCoalesced', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      source: 'A',
+      positionOverrides: {},
+      edgeWaypoints: {},
+      edgeAnchorOverrides: {},
+    });
+    useStyleStore.setState({ nodeStyles: {}, edgeStyles: {}, annotations: [] });
+    useHistoryStore.setState({ past: [], future: [] });
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    useHistoryStore.getState().endCoalesce();
+    vi.useRealTimers();
+  });
+
+  it('collapses a rapid burst of same-key edits into a single undo step', () => {
+    // Simulates dragging a stroke-width slider: many calls, same node,
+    // each mutating the value further.
+    useHistoryStore.getState().commitCoalesced('node:A');
+    useStyleStore.setState({ nodeStyles: { A: { strokeWidth: 1 } }, edgeStyles: {}, annotations: [] });
+    useHistoryStore.getState().commitCoalesced('node:A');
+    useStyleStore.setState({ nodeStyles: { A: { strokeWidth: 2 } }, edgeStyles: {}, annotations: [] });
+    useHistoryStore.getState().commitCoalesced('node:A');
+    useStyleStore.setState({ nodeStyles: { A: { strokeWidth: 3 } }, edgeStyles: {}, annotations: [] });
+
+    expect(useHistoryStore.getState().past).toHaveLength(1);
+
+    useHistoryStore.getState().undo();
+    // Undo restores the state from BEFORE the whole burst, not an
+    // intermediate value.
+    expect(useStyleStore.getState().nodeStyles.A).toBeUndefined();
+  });
+
+  it('switching the key (e.g. selecting a different node) starts a new step immediately', () => {
+    useHistoryStore.getState().commitCoalesced('node:A');
+    useStyleStore.setState({ nodeStyles: { A: { fill: '#111' } }, edgeStyles: {}, annotations: [] });
+    useHistoryStore.getState().commitCoalesced('node:B');
+    useStyleStore.setState({ nodeStyles: { A: { fill: '#111' }, B: { fill: '#222' } }, edgeStyles: {}, annotations: [] });
+
+    expect(useHistoryStore.getState().past).toHaveLength(2);
+  });
+
+  it('starts a fresh step after the coalesce window elapses, even with the same key', () => {
+    useHistoryStore.getState().commitCoalesced('node:A');
+    useStyleStore.setState({ nodeStyles: { A: { fill: '#111' } }, edgeStyles: {}, annotations: [] });
+
+    vi.advanceTimersByTime(1000); // past the 800ms idle window
+
+    useHistoryStore.getState().commitCoalesced('node:A');
+    useStyleStore.setState({ nodeStyles: { A: { fill: '#222' } }, edgeStyles: {}, annotations: [] });
+
+    expect(useHistoryStore.getState().past).toHaveLength(2);
+  });
+
+  it('a plain commit() closes any pending coalesce session', () => {
+    useHistoryStore.getState().commitCoalesced('node:A');
+    useStyleStore.setState({ nodeStyles: { A: { fill: '#111' } }, edgeStyles: {}, annotations: [] });
+
+    useHistoryStore.getState().commit(); // e.g. a node drag commit
+    useHistoryStore.getState().commitCoalesced('node:A'); // same key, but session was closed
+
+    expect(useHistoryStore.getState().past).toHaveLength(3);
   });
 });

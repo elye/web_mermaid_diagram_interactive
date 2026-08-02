@@ -21,6 +21,10 @@ export function DiagramCanvas() {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const svgHostRef = useRef<HTMLDivElement>(null);
+  // Each node's natural (Mermaid-computed) transform, captured right after
+  // the SVG is injected and before any position override is applied. See
+  // the SVG-injection effect below for why this is needed.
+  const naturalPositionsRef = useRef<Map<string, string>>(new Map());
 
   const svg = useDiagramStore((s) => s.svg);
   const positionOverrides = useDiagramStore((s) => s.positionOverrides);
@@ -60,11 +64,23 @@ export function DiagramCanvas() {
   useNodeDrag(svgHostRef);
   useEdgeDrag(svgHostRef, edgeDragDeps);
 
-  // Inject SVG into DOM.
+  // Inject SVG into DOM, then snapshot each node's natural (Mermaid-computed)
+  // transform before any position overrides are applied. This snapshot is
+  // what lets us restore a node's original spot below when an override is
+  // removed entirely (e.g. undoing a node's very first move) — without it,
+  // the node's transform attribute would just keep whatever value we last
+  // wrote and never revert, even though the store correctly has no override.
   useLayoutEffect(() => {
-    if (svgHostRef.current) {
-      svgHostRef.current.innerHTML = svg;
-    }
+    const host = svgHostRef.current;
+    if (!host) return;
+    host.innerHTML = svg;
+    const naturalPositions = new Map<string, string>();
+    host.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
+      const id = g.getAttribute('data-node-id');
+      const transform = g.getAttribute('transform');
+      if (id && transform) naturalPositions.set(id, transform);
+    });
+    naturalPositionsRef.current = naturalPositions;
   }, [svg]);
 
   // Apply per-node position overrides after each render, then re-run the
@@ -81,12 +97,21 @@ export function DiagramCanvas() {
     svgEl.style.overflow = 'visible';
     (svgEl.style as CSSStyleDeclaration).maxWidth = 'none';
 
-    // Only apply overrides for node IDs that still exist in the freshly
-    // rendered SVG. Stale IDs from a previous source revision are ignored,
-    // but kept in the store so undo can restore them.
-    Object.entries(positionOverrides).forEach(([id, pos]) => {
-      const g = svgEl.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(id)}"]`);
-      if (g) g.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
+    // For every node in the freshly rendered SVG: apply its override if one
+    // exists, otherwise restore its natural (pre-override) position. Without
+    // the "else" branch, undoing a node's only override left the DOM stuck
+    // showing the last-overridden position forever, even though the store
+    // correctly went back to having no override for that node.
+    svgEl.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
+      const id = g.getAttribute('data-node-id');
+      if (!id) return;
+      const pos = positionOverrides[id];
+      if (pos) {
+        g.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
+      } else {
+        const natural = naturalPositionsRef.current.get(id);
+        if (natural) g.setAttribute('transform', natural);
+      }
     });
 
     routeAllEdges(svgEl, { lineStyles: lineStyleMap, waypoints: waypointMap, anchorOverrides: anchorOverrideMap });

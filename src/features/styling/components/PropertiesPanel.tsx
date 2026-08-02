@@ -22,13 +22,18 @@ function NodePropertiesPanel() {
   const setNodeStyle = useStyleStore((s) => s.setNodeStyle);
   const clearNodeStyle = useStyleStore((s) => s.clearNodeStyle);
   const commit = useHistoryStore((s) => s.commit);
+  const commitCoalesced = useHistoryStore((s) => s.commitCoalesced);
 
   const firstId = Array.from(selectedNodeIds)[0];
   const current = nodeStyles[firstId] ?? {};
+  // Groups a burst of edits (slider drag, rapid preset clicks, etc.) to the
+  // same selected node(s) into a single undo step — see historyStore's
+  // `commitCoalesced` doc comment.
+  const historyKey = `node:${Array.from(selectedNodeIds).sort().join(',')}`;
 
   /** Apply a single-property patch to all selected nodes. */
   const applyProp = (patch: StyleOverride) => {
-    commit();
+    commitCoalesced(historyKey);
     selectedNodeIds.forEach((id) => setNodeStyle(id, patch));
   };
 
@@ -147,18 +152,22 @@ function EdgePropertiesPanel() {
   const clearEdgeWaypoints = useDiagramStore((s) => s.clearEdgeWaypoints);
   const clearEdgeAnchorOverrides = useDiagramStore((s) => s.clearEdgeAnchorOverrides);
   const commit = useHistoryStore((s) => s.commit);
+  const commitCoalesced = useHistoryStore((s) => s.commitCoalesced);
 
   const firstId = Array.from(selectedEdgeIds)[0];
   const current = edgeStyles[firstId] ?? {};
+  // Groups a burst of edits to the same selected edge(s) into a single undo
+  // step — see historyStore's `commitCoalesced` doc comment.
+  const historyKey = `edge:${Array.from(selectedEdgeIds).sort().join(',')}`;
 
   /** Apply a single-property patch to all selected edges. */
   const applyProp = (patch: StyleOverride) => {
-    commit();
+    commitCoalesced(historyKey);
     selectedEdgeIds.forEach((id) => setEdgeStyle(id, patch));
   };
 
   const setLineStyle = (style: EdgeLineStyle) => {
-    commit();
+    commitCoalesced(historyKey);
     selectedEdgeIds.forEach((id) => {
       setEdgeStyle(id, { lineStyle: style });
       // Clear waypoints when switching away from curve.
