@@ -15,7 +15,7 @@ import { useNodeDrag } from '../hooks/useNodeDrag';
 import { useEdgeDrag } from '../hooks/useEdgeDrag';
 import { routeAllEdges, expandViewBoxToFit } from '../services/edgeRouter';
 import { resizeClusters } from '../services/clusterResize';
-import { parseSubgraphMembership } from '../services/cluster/subgraphParser';
+import { parseSubgraphMembership, collectAllNodeIds } from '../services/cluster/subgraphParser';
 import type { EdgeLineStyle } from '@/shared/types/diagram';
 
 export function DiagramCanvas() {
@@ -310,7 +310,8 @@ export function DiagramCanvas() {
       // parser to discover which node IDs belong to this cluster.
       const source = useDiagramStore.getState().source;
       const membership = parseSubgraphMembership(source);
-      const clusterMembers = membership.get(clusterId) ?? new Set<string>();
+      // Recursively collect all leaf node IDs (handles nested subgraphs)
+      const allNodeIds = collectAllNodeIds(clusterId, membership);
 
       const nodeIds: string[] = [];
       const nodeOriginalPositions = new Map<string, { x: number; y: number }>();
@@ -320,7 +321,7 @@ export function DiagramCanvas() {
 
       svg.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
         const nodeId = g.getAttribute('data-node-id');
-        if (nodeId && clusterMembers.has(nodeId)) {
+        if (nodeId && allNodeIds.has(nodeId)) {
           nodeIds.push(nodeId);
           const transform = g.getAttribute('transform') ?? '';
           const m = /translate\(\s*(-?\d+(?:\.\d+)?)[\s,]+(-?\d+(?:\.\d+)?)\s*\)/.exec(transform);

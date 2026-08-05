@@ -16,6 +16,45 @@
  * Only flowchart / graph diagrams use `subgraph` syntax. For other diagram
  * types the function returns an empty map (no-op).
  */
+
+/**
+ * Given a membership map (from parseSubgraphMembership) and a root cluster id,
+ * recursively collect ALL leaf node IDs that belong to the cluster (directly or
+ * via nested sub-clusters at any depth).
+ *
+ * Nested subgraph IDs are NOT included in the returned set — only plain node ids.
+ */
+export function collectAllNodeIds(
+  clusterId: string,
+  membership: Map<string, Set<string>>,
+): Set<string> {
+  const result = new Set<string>();
+  const visited = new Set<string>(); // guard against cycles
+
+  function visit(id: string) {
+    if (visited.has(id)) return;
+    visited.add(id);
+    const members = membership.get(id);
+    if (!members) {
+      // id is a leaf node (not a subgraph), add it
+      result.add(id);
+      return;
+    }
+    // id is a subgraph — recurse into its members
+    for (const memberId of members) {
+      if (membership.has(memberId)) {
+        // memberId is itself a subgraph, recurse
+        visit(memberId);
+      } else {
+        // memberId is a plain node
+        result.add(memberId);
+      }
+    }
+  }
+
+  visit(clusterId);
+  return result;
+}
 export function parseSubgraphMembership(source: string): Map<string, Set<string>> {
   const result = new Map<string, Set<string>>();
   const stack: string[] = []; // stack of open subgraph ids (innermost last)
