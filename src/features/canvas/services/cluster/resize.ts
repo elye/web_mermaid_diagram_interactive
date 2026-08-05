@@ -118,5 +118,24 @@ function applyClusterBBox(g: SVGGElement, bbox: BBox): void {
     const labelX = 0; // centred on the cluster's own origin
     const labelY = -bbox.height / 2 + 14; // just inside the top border
     labelG.setAttribute('transform', `translate(${labelX}, ${labelY})`);
+
+    // Enforce horizontal centering on the text elements.
+    // Mermaid may emit text-anchor="start" with a positive x offset; reset both.
+    labelG.querySelectorAll<SVGTextElement>('text').forEach((t) => {
+      t.setAttribute('text-anchor', 'middle');
+      t.setAttribute('x', '0');
+    });
+    labelG.querySelectorAll<SVGTSpanElement>('tspan').forEach((ts) => {
+      ts.setAttribute('text-anchor', 'middle');
+    });
+
+    // foreignObject (HTML label mode): center it on the cluster origin.
+    const fo = labelG.querySelector<SVGForeignObjectElement>('foreignObject');
+    if (fo) {
+      const foWidth = fo.getAttribute('width');
+      if (foWidth) fo.setAttribute('x', String(-Number(foWidth) / 2));
+      const inner = fo.querySelector<HTMLElement>('[class*="nodeLabel"], span, div');
+      if (inner) inner.style.textAlign = 'center';
+    }
   }
 }

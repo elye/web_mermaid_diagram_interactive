@@ -204,6 +204,39 @@ export function DiagramCanvas() {
           style.strokeWidth != null ? `${style.strokeWidth}px` : '',
         );
       }
+
+      // ── Label: contrast text color ──
+      // Mermaid uses htmlLabels:true so the title lives in a foreignObject:
+      //   g.cluster-label > foreignObject > div > span.nodeLabel
+      // We must set `color` on the span (and its parent div as fallback),
+      // because Mermaid's theme CSS targets .nodeLabel with its own color
+      // and !important is needed to win. The outer <div> color alone is
+      // not enough because the span may have a more specific rule.
+      const labelG = g.querySelector<SVGGElement>(
+        ':scope > g.label, :scope > g.cluster-label',
+      );
+      if (labelG) {
+        const fo = labelG.querySelector<SVGForeignObjectElement>('foreignObject');
+        if (fo) {
+          // Only apply a contrast color when there is an explicit fill override.
+          // When there is no override (style.fill is empty) clear the inline color
+          // so Mermaid's own theme CSS takes over again.
+          const textColor = style.fill ? contrastColor(style.fill) : '';
+
+          // Target span.nodeLabel directly — that's what Mermaid's CSS colours.
+          // Also set it on the wrapping div so any other inline text inherits it.
+          fo.querySelectorAll<HTMLElement>('span.nodeLabel, span[class*="nodeLabel"]').forEach((s) => {
+            setImportantStyle(s, 'color', textColor);
+          });
+          const wrapDiv = fo.querySelector<HTMLElement>('div');
+          if (wrapDiv) setImportantStyle(wrapDiv, 'color', textColor);
+        }
+
+        // SVG text-based labels (non-htmlLabels fallback).
+        labelG.querySelectorAll<SVGTextElement>('text').forEach((t) => {
+          setImportantStyle(t, 'fill', style.fill ? contrastColor(style.fill) : '');
+        });
+      }
     });
   }, [nodeStyles, edgeStyles, clusterStyles, svg, selectedNodeIds, selectedEdgeIds]);
 
@@ -439,6 +472,33 @@ export function DiagramCanvas() {
 
 function cssEscape(v: string): string {
   return v.replace(/["\\]/g, '\\$&');
+}
+
+/**
+ * Given any CSS color string, return '#000000' or '#ffffff' whichever
+ * gives better contrast against it (WCAG relative luminance formula).
+ */
+function contrastColor(css: string): string {
+  // Parse via canvas so we handle any CSS color format.
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 1;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return '#000000';
+    ctx.fillStyle = css;
+    ctx.fillRect(0, 0, 1, 1);
+    const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+    if (a < 10) return '#000000'; // transparent — default dark
+    // sRGB linearisation then relative luminance (WCAG 2.1)
+    const toLinear = (c: number) => {
+      const s = c / 255;
+      return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    };
+    const L = 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
+    return L > 0.179 ? '#000000' : '#ffffff';
+  } catch {
+    return '#000000';
+  }
 }
 
 function extractClusterUserId(rawId: string): string | null {
