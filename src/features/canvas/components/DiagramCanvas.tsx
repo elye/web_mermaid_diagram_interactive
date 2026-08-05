@@ -32,8 +32,10 @@ export function DiagramCanvas() {
   const edgeAnchorOverrides = useDiagramStore((s) => s.edgeAnchorOverrides);
   const nodeStyles = useStyleStore((s) => s.nodeStyles);
   const edgeStyles = useStyleStore((s) => s.edgeStyles);
+  const clusterStyles = useStyleStore((s) => s.clusterStyles);
   const selectedNodeIds = useSelectionStore((s) => s.selectedNodeIds);
   const selectedEdgeIds = useSelectionStore((s) => s.selectedEdgeIds);
+  const selectedClusterId = useSelectionStore((s) => s.selectedClusterId);
   const viewport = useUiStore((s) => s.viewport);
 
   // Build Maps for the router (stable across re-renders when contents haven't changed).
@@ -183,7 +185,43 @@ export function DiagramCanvas() {
       );
       setImportantStyle(p, 'stroke-dasharray', style.dashArray ?? '');
     });
-  }, [nodeStyles, edgeStyles, svg, selectedNodeIds, selectedEdgeIds]);
+
+    // ── Clusters ──
+    host.querySelectorAll<SVGGElement>('g.cluster').forEach((g) => {
+      const id = extractClusterUserId(g.getAttribute('id') ?? '');
+      if (!id) return;
+      const style = clusterStyles[id] ?? {};
+
+      const rect = g.querySelector('rect') as SVGRectElement | null;
+      if (rect) {
+        setImportantStyle(rect, 'fill', style.fill ?? '');
+        setImportantStyle(rect, 'stroke', style.stroke ?? '');
+        setImportantStyle(
+          rect,
+          'stroke-width',
+          style.strokeWidth != null ? `${style.strokeWidth}px` : '',
+        );
+      }
+    });
+  }, [nodeStyles, edgeStyles, clusterStyles, svg, selectedNodeIds, selectedEdgeIds]);
+
+  // Wire cluster click → selectCluster. Mounted whenever the SVG changes so
+  // newly rendered clusters are always covered.
+  useEffect(() => {
+    const host = svgHostRef.current;
+    if (!host) return;
+    const handleClusterClick = (e: MouseEvent) => {
+      const target = e.target as Element | null;
+      const clusterGroup = target?.closest('g.cluster') as SVGGElement | null;
+      if (!clusterGroup) return;
+      const clusterId = extractClusterUserId(clusterGroup.getAttribute('id') ?? '');
+      if (!clusterId) return;
+      e.stopPropagation();
+      useSelectionStore.getState().selectCluster(clusterId);
+    };
+    host.addEventListener('click', handleClusterClick);
+    return () => host.removeEventListener('click', handleClusterClick);
+  }, [svg]);
 
   // Wire edge click → selectEdge. Mounted whenever the SVG changes so
   // newly rendered edges are always covered.
@@ -226,7 +264,16 @@ export function DiagramCanvas() {
       const p = host.querySelector(`path[data-edge-id="${cssEscape(id)}"]`);
       p?.classList.add('mf-edge--selected');
     });
-  }, [selectedNodeIds, selectedEdgeIds, svg]);
+    // Reflect cluster selection.
+    host.querySelectorAll('.mf-cluster--selected').forEach((el) => el.classList.remove('mf-cluster--selected'));
+    if (selectedClusterId) {
+      const clusters = Array.from(host.querySelectorAll<SVGGElement>('g.cluster'));
+      const cluster = clusters.find((g) =>
+        extractClusterUserId(g.getAttribute('id') ?? '') === selectedClusterId
+      );
+      cluster?.classList.add('mf-cluster--selected');
+    }
+  }, [selectedNodeIds, selectedEdgeIds, selectedClusterId, svg]);
 
   return (
     <div
@@ -257,6 +304,17 @@ export function DiagramCanvas() {
 
 function cssEscape(v: string): string {
   return v.replace(/["\\]/g, '\\$&');
+}
+
+function extractClusterUserId(rawId: string): string | null {
+  // Common Mermaid patterns:
+  //   flowchart-<userId>-<n>
+  //   graph-<userId>-<n>
+  //   <userId>-<n>  (older versions)
+  const m =
+    /^(?:flowchart|graph|subgraph)-(.+)-\d+$/.exec(rawId) ??
+    /^(.+)-\d+$/.exec(rawId);
+  return m ? m[1] : rawId || null;
 }
 
 /**

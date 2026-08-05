@@ -101,3 +101,28 @@ path[data-edge-id] {
 .mf-canvas .edgeLabel {
   pointer-events: none;
 }
+
+/* ── Cluster (subgraph) interaction ───────────────────────────────────────── */
+
+g.cluster {
+  cursor: grab;
+}
+
+g.cluster:hover > rect {
+  opacity: 0.9;
+}
+
+.mf-cluster--dragging {
+  cursor: grabbing;
+}
+
+.mf-cluster--dragging > rect {
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.25));
+}
+
+/* Cluster selection: apply drop-shadow filter to the rect inside the cluster */
+.mf-cluster--selected > rect {
+  filter:
+    drop-shadow(0 0 1.5px var(--mf-accent))
+    drop-shadow(0 0 4px var(--mf-accent));
+}

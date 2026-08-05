@@ -279,12 +279,98 @@ function EdgePropertiesPanel() {
   );
 }
 
+// ─── Cluster Properties ──────────────────────────────────────────────────────────
+
+function ClusterPropertiesPanel() {
+  const selectedClusterId = useSelectionStore((s) => s.selectedClusterId);
+  if (!selectedClusterId) return null;
+
+  const clusterStyles = useStyleStore((s) => s.clusterStyles);
+  const setClusterStyle = useStyleStore((s) => s.setClusterStyle);
+  const clearClusterStyle = useStyleStore((s) => s.clearClusterStyle);
+  const commit = useHistoryStore((s) => s.commit);
+  const commitCoalesced = useHistoryStore((s) => s.commitCoalesced);
+
+  const current = clusterStyles[selectedClusterId] ?? {};
+  const historyKey = `cluster:${selectedClusterId}`;
+
+  const applyProp = (patch: StyleOverride) => {
+    commitCoalesced(historyKey);
+    setClusterStyle(selectedClusterId, patch);
+  };
+
+  const resetAll = () => {
+    commit();
+    clearClusterStyle(selectedClusterId);
+  };
+
+  return (
+    <aside
+      role="region"
+      aria-label="Cluster properties"
+      className="z-10 h-full w-56 flex-shrink-0 overflow-y-auto border-l border-border bg-surface p-3 text-sm shadow-md"
+    >
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="font-semibold">Subgraph</h2>
+        <span className="text-xs text-muted">{selectedClusterId}</span>
+      </div>
+
+      <label className="mb-2 block">
+        <span className="mb-1 block text-xs text-muted">Fill</span>
+        <input
+          type="color"
+          aria-label="Cluster fill color"
+          value={current.fill ?? '#ffffff'}
+          onChange={(e) => applyProp({ fill: e.target.value })}
+          className="h-8 w-full cursor-pointer rounded border border-border bg-surface"
+        />
+      </label>
+
+      <label className="mb-2 block">
+        <span className="mb-1 block text-xs text-muted">Stroke color</span>
+        <input
+          type="color"
+          aria-label="Cluster stroke color"
+          value={current.stroke ?? '#999999'}
+          onChange={(e) => applyProp({ stroke: e.target.value })}
+          className="h-8 w-full cursor-pointer rounded border border-border bg-surface"
+        />
+      </label>
+
+      <label className="mb-2 block">
+        <span className="mb-1 block text-xs text-muted">
+          Stroke width: {current.strokeWidth ?? 2}px
+        </span>
+        <input
+          type="range"
+          min={0}
+          max={12}
+          step={0.5}
+          value={current.strokeWidth ?? 2}
+          onChange={(e) => applyProp({ strokeWidth: Number(e.target.value) })}
+          className="w-full"
+        />
+      </label>
+
+      <button
+        onClick={resetAll}
+        className="w-full rounded border border-border px-2 py-1 text-xs text-muted hover:bg-surface-alt"
+        title="Reset cluster to its original Mermaid style"
+      >
+        ↺ Reset to original
+      </button>
+    </aside>
+  );
+}
+
 // ─── Panel switcher ───────────────────────────────────────────────────────────
 
 export function PropertiesPanel() {
   const selectedNodeIds = useSelectionStore((s) => s.selectedNodeIds);
   const selectedEdgeIds = useSelectionStore((s) => s.selectedEdgeIds);
+  const selectedClusterId = useSelectionStore((s) => s.selectedClusterId);
 
+  if (selectedClusterId) return <ClusterPropertiesPanel />;
   if (selectedNodeIds.size > 0) return <NodePropertiesPanel />;
   if (selectedEdgeIds.size > 0) return <EdgePropertiesPanel />;
   return null;
