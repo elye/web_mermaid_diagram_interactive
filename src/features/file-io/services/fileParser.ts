@@ -19,7 +19,7 @@ export function loadFromText(text: string, filename?: string): ParseResult {
   if (ext === 'mermaidflow' || looksJson) {
     try {
       const parsed = JSON.parse(text) as MermaidFlowFile;
-      const supported = parsed.version === '1.0' || parsed.version === '1.1';
+      const supported = parsed.version === '1.0' || parsed.version === '1.1' || parsed.version === '1.2';
       if (!supported || typeof parsed.mermaidSource !== 'string') {
         return { kind: 'unknown', ok: false, error: 'Unsupported .mermaidflow version.' };
       }
@@ -45,17 +45,20 @@ export function loadFromText(text: string, filename?: string): ParseResult {
 
 export function hydrateFromFile(file: MermaidFlowFile): void {
   // v1.1 adds edgeStyles / edgeWaypoints / edgeAnchorOverrides.
-  // v1.0 files simply omit them → treated as empty maps.
-  const isV11 = file.version === '1.1';
+  // v1.2 adds clusterStyles.
+  // Older files simply omit new fields → treated as empty maps.
+  const isV11orHigher = file.version === '1.1' || file.version === '1.2';
+  const isV12 = file.version === '1.2';
   useDiagramStore.getState().hydrate({
     source: file.mermaidSource,
     positionOverrides: file.positionOverrides ?? {},
-    edgeWaypoints: isV11 ? file.edgeWaypoints ?? {} : {},
-    edgeAnchorOverrides: isV11 ? file.edgeAnchorOverrides ?? {} : {},
+    edgeWaypoints: isV11orHigher ? (file as { edgeWaypoints?: {} }).edgeWaypoints ?? {} : {},
+    edgeAnchorOverrides: isV11orHigher ? (file as { edgeAnchorOverrides?: {} }).edgeAnchorOverrides ?? {} : {},
   });
   useStyleStore.getState().hydrate({
     nodeStyles: file.styleOverrides ?? {},
-    edgeStyles: isV11 ? file.edgeStyles ?? {} : {},
+    edgeStyles: isV11orHigher ? (file as { edgeStyles?: {} }).edgeStyles ?? {} : {},
+    clusterStyles: isV12 ? (file as { clusterStyles?: {} }).clusterStyles ?? {} : {},
     annotations: file.annotations ?? [],
   });
   if (file.viewportState) {

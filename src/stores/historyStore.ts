@@ -31,6 +31,7 @@ interface Snapshot {
   edgeAnchorOverrides: Record<string, unknown>;
   nodeStyles: Record<string, unknown>;
   edgeStyles: Record<string, unknown>;
+  clusterStyles: Record<string, unknown>;
   annotations: unknown[];
 }
 
@@ -88,6 +89,7 @@ function snapshot(): Snapshot {
     edgeAnchorOverrides: clone(d.edgeAnchorOverrides),
     nodeStyles: clone(s.nodeStyles),
     edgeStyles: clone(s.edgeStyles),
+    clusterStyles: clone(s.clusterStyles),
     annotations: clone(s.annotations),
   };
 }
@@ -102,6 +104,7 @@ function apply(snap: Snapshot) {
   useStyleStore.getState().hydrate({
     nodeStyles: snap.nodeStyles as Record<string, never>,
     edgeStyles: snap.edgeStyles as Record<string, never>,
+    clusterStyles: snap.clusterStyles as Record<string, never>,
     annotations: snap.annotations as never[],
   });
 }

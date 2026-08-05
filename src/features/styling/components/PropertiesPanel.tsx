@@ -8,6 +8,7 @@
  * Edge panel  : stroke color, stroke width, dash pattern, line style,
  *               reset-to-origin button.
  */
+import { useEffect, useState } from 'react';
 import { useSelectionStore } from '@/stores/selectionStore';
 import { useStyleStore } from '@/stores/styleStore';
 import { useHistoryStore } from '@/stores/historyStore';
@@ -281,27 +282,69 @@ function EdgePropertiesPanel() {
 
 // ─── Cluster Properties ──────────────────────────────────────────────────────────
 
+/** Convert rgb(r, g, b) / rgba(…) / any CSS color to a #rrggbb hex string. */
+function cssColorToHex(css: string): string {
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 1;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = css;
+    ctx.fillRect(0, 0, 1, 1);
+    const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+    return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return '#ffffff';
+  }
+}
+
+/** Read the computed fill/stroke of a cluster's rect from the live SVG. */
+function readSvgClusterColors(clusterId: string): { fill: string; stroke: string } {
+  const g = document.getElementById(clusterId);
+  const rect = g?.querySelector('rect');
+  if (!rect) return { fill: '#ffffff', stroke: '#999999' };
+  const cs = getComputedStyle(rect);
+  return {
+    fill: cssColorToHex(cs.fill || '#ffffff'),
+    stroke: cssColorToHex(cs.stroke || '#999999'),
+  };
+}
+
 function ClusterPropertiesPanel() {
   const selectedClusterId = useSelectionStore((s) => s.selectedClusterId);
   if (!selectedClusterId) return null;
 
+  return <ClusterPropertiesPanelInner key={selectedClusterId} clusterId={selectedClusterId} />;
+}
+
+function ClusterPropertiesPanelInner({ clusterId }: { clusterId: string }) {
   const clusterStyles = useStyleStore((s) => s.clusterStyles);
   const setClusterStyle = useStyleStore((s) => s.setClusterStyle);
   const clearClusterStyle = useStyleStore((s) => s.clearClusterStyle);
   const commit = useHistoryStore((s) => s.commit);
   const commitCoalesced = useHistoryStore((s) => s.commitCoalesced);
 
-  const current = clusterStyles[selectedClusterId] ?? {};
-  const historyKey = `cluster:${selectedClusterId}`;
+  const current = clusterStyles[clusterId] ?? {};
+  const historyKey = `cluster:${clusterId}`;
+
+  // Read actual SVG colors as defaults when no override is set yet.
+  const [svgDefaults, setSvgDefaults] = useState(() => readSvgClusterColors(clusterId));
+  useEffect(() => {
+    setSvgDefaults(readSvgClusterColors(clusterId));
+  }, [clusterId]);
+
+  const fillValue = current.fill ?? svgDefaults.fill;
+  const strokeValue = current.stroke ?? svgDefaults.stroke;
 
   const applyProp = (patch: StyleOverride) => {
     commitCoalesced(historyKey);
-    setClusterStyle(selectedClusterId, patch);
+    setClusterStyle(clusterId, patch);
   };
 
   const resetAll = () => {
     commit();
-    clearClusterStyle(selectedClusterId);
+    clearClusterStyle(clusterId);
+    // Re-read SVG defaults after reset (Mermaid re-applies its own styles)
+    setTimeout(() => setSvgDefaults(readSvgClusterColors(clusterId)), 50);
   };
 
   return (
@@ -312,7 +355,7 @@ function ClusterPropertiesPanel() {
     >
       <div className="mb-2 flex items-center justify-between">
         <h2 className="font-semibold">Subgraph</h2>
-        <span className="text-xs text-muted">{selectedClusterId}</span>
+        <span className="text-xs text-muted">{clusterId}</span>
       </div>
 
       <label className="mb-2 block">
@@ -320,7 +363,7 @@ function ClusterPropertiesPanel() {
         <input
           type="color"
           aria-label="Cluster fill color"
-          value={current.fill ?? '#ffffff'}
+          value={fillValue}
           onChange={(e) => applyProp({ fill: e.target.value })}
           className="h-8 w-full cursor-pointer rounded border border-border bg-surface"
         />
@@ -331,7 +374,7 @@ function ClusterPropertiesPanel() {
         <input
           type="color"
           aria-label="Cluster stroke color"
-          value={current.stroke ?? '#999999'}
+          value={strokeValue}
           onChange={(e) => applyProp({ stroke: e.target.value })}
           className="h-8 w-full cursor-pointer rounded border border-border bg-surface"
         />
@@ -351,6 +394,21 @@ function ClusterPropertiesPanel() {
           className="w-full"
         />
       </label>
+
+      {/* Presets */}
+      <div className="mb-3 flex flex-wrap gap-1">
+        {CLUSTER_PRESETS.map((preset) => (
+          <button
+            key={preset.name}
+            onClick={() => applyProp(preset.style)}
+            className="rounded border border-border px-2 py-1 text-xs hover:bg-surface-alt"
+            style={{ background: preset.style.fill, color: preset.labelColor, borderColor: preset.style.stroke }}
+            title={preset.name}
+          >
+            {preset.name}
+          </button>
+        ))}
+      </div>
 
       <button
         onClick={resetAll}
@@ -384,3 +442,12 @@ const NODE_PRESETS = [
   { name: 'Error', style: { fill: '#fee2e2', stroke: '#dc2626', fontColor: '#7f1d1d' } },
   { name: 'Muted', style: { fill: '#f3f4f6', stroke: '#6b7280', fontColor: '#374151' } },
 ] as const;
+
+const CLUSTER_PRESETS: { name: string; labelColor: string; style: StyleOverride }[] = [
+  { name: 'Blue',    labelColor: '#1e3a5f', style: { fill: '#dbeafe', stroke: '#3b82f6' } },
+  { name: 'Green',   labelColor: '#14532d', style: { fill: '#dcfce7', stroke: '#16a34a' } },
+  { name: 'Yellow',  labelColor: '#78350f', style: { fill: '#fef3c7', stroke: '#d97706' } },
+  { name: 'Red',     labelColor: '#7f1d1d', style: { fill: '#fee2e2', stroke: '#dc2626' } },
+  { name: 'Purple',  labelColor: '#3b0764', style: { fill: '#f3e8ff', stroke: '#9333ea' } },
+  { name: 'Slate',   labelColor: '#1e293b', style: { fill: '#f1f5f9', stroke: '#64748b' } },
+];
