@@ -39,53 +39,17 @@ interface DragCtx {
   moved: boolean;
 }
 
-interface ClusterDragCtx {
-  clusterId: string;
-  clusterGroup: SVGGElement;
-  targets: DragTarget[];
-  pointerStartX: number;
-  pointerStartY: number;
-  svg: SVGSVGElement;
-  moved: boolean;
-}
-
 export function useNodeDrag(svgHostRef: React.RefObject<HTMLElement>) {
   useEffect(() => {
     const host = svgHostRef.current;
     if (!host) return;
 
     let ctx: DragCtx | null = null;
-    let clusterDragCtx: ClusterDragCtx | null = null;
 
     const onPointerDown = (e: PointerEvent) => {
       const target = e.target as Element | null;
 
-      // Check for cluster click first (must check before node, as nodes can be inside clusters)
-      const clusterGroup = target?.closest('g.cluster') as SVGGElement | null;
-      if (clusterGroup) {
-        const clusterId = extractClusterUserId(clusterGroup.getAttribute('id') ?? '');
-        if (clusterId) {
-          handleClusterPointerDown(e, clusterGroup, clusterId);
-          return;
-        }
-      }
-
-      // Check if we clicked inside the cluster but want to select the cluster (click on rect or label)
-      // This handles clicking on the cluster's rect/label directly
-      const nodeInCluster = target?.closest('g[data-node-id]');
-      if (nodeInCluster) {
-        const clusterParent = nodeInCluster.closest('g.cluster') as SVGGElement | null;
-        // If we're holding Shift or already have the node selected, do normal node drag
-        // Otherwise, if there's a cluster parent and we're just clicking (not already on a selected node),
-        // try to interpret as cluster click
-        if (!clusterParent || e.shiftKey) {
-          // Fall through to normal node handling
-        } else {
-          // Normal node click - fall through
-        }
-      }
-
-      // Otherwise handle normal node drag
+      // Handle normal node drag (clusters are handled via click in DiagramCanvas)
       const group = target?.closest('g[data-node-id]') as SVGGElement | null;
       if (!group) return;
 
@@ -129,45 +93,6 @@ export function useNodeDrag(svgHostRef: React.RefObject<HTMLElement>) {
       e.stopPropagation();
       window.addEventListener('pointermove', onPointerMove);
       window.addEventListener('pointerup', onPointerUp);
-    };
-
-    const handleClusterPointerDown = (e: PointerEvent, clusterGroup: SVGGElement, clusterId: string) => {
-      useSelectionStore.getState().selectCluster(clusterId);
-      
-      const svg = clusterGroup.ownerSVGElement;
-      if (!svg) return;
-
-      // Get all nodes inside this cluster
-      const nodesInCluster = new Set<string>();
-      clusterGroup.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
-        const nodeId = g.getAttribute('data-node-id');
-        if (nodeId) nodesInCluster.add(nodeId);
-      });
-
-      // Collect drag targets for all nodes in the cluster
-      const targets: DragTarget[] = [];
-      nodesInCluster.forEach((nid) => {
-        const g = svg.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nid)}"]`);
-        if (!g) return;
-        const { x, y } = readTranslate(g);
-        targets.push({ id: nid, group: g, origX: x, origY: y });
-      });
-      if (targets.length === 0) return;
-
-      clusterDragCtx = {
-        clusterId,
-        clusterGroup,
-        targets,
-        pointerStartX: e.clientX,
-        pointerStartY: e.clientY,
-        svg,
-        moved: false,
-      };
-      clusterGroup.classList.add('mf-cluster--dragging');
-      targets.forEach((t) => t.group.classList.add('mf-node--dragging'));
-      e.stopPropagation();
-      window.addEventListener('pointermove', onClusterPointerMove);
-      window.addEventListener('pointerup', onClusterPointerUp);
     };
 
     const onPointerMove = (e: PointerEvent) => {
@@ -221,63 +146,11 @@ export function useNodeDrag(svgHostRef: React.RefObject<HTMLElement>) {
       window.removeEventListener('pointerup', onPointerUp);
     };
 
-    const onClusterPointerMove = (e: PointerEvent) => {
-      if (!clusterDragCtx) return;
-      const zoom = useUiStore.getState().viewport.zoom || 1;
-      const dx = (e.clientX - clusterDragCtx.pointerStartX) / zoom;
-      const dy = (e.clientY - clusterDragCtx.pointerStartY) / zoom;
-      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) clusterDragCtx.moved = true;
-
-      // Move all nodes in the cluster by the same delta
-      clusterDragCtx.targets.forEach((t) => {
-        writeTranslate(t.group, t.origX + dx, t.origY + dy);
-      });
-
-      // Route every edge and resize clusters
-      const { edgeWaypoints, edgeAnchorOverrides } = useDiagramStore.getState();
-      const edgeStyles = useStyleStore.getState().edgeStyles;
-      const lineStyles = new Map(
-        Object.entries(edgeStyles)
-          .filter(([, s]) => s.lineStyle)
-          .map(([id, s]) => [id, s.lineStyle!] as const),
-      );
-      routeAllEdges(clusterDragCtx.svg, {
-        lineStyles,
-        waypoints: new Map(Object.entries(edgeWaypoints)),
-        anchorOverrides: new Map(Object.entries(edgeAnchorOverrides)),
-      });
-      resizeClusters(clusterDragCtx.svg, useDiagramStore.getState().source);
-      expandViewBoxToFit(clusterDragCtx.svg);
-    };
-
-    const onClusterPointerUp = () => {
-      if (!clusterDragCtx) return;
-      const wasMoved = clusterDragCtx.moved;
-      const finals = clusterDragCtx.targets.map((t) => {
-        t.group.classList.remove('mf-node--dragging');
-        const { x, y } = readTranslate(t.group);
-        return { id: t.id, x, y };
-      });
-      clusterDragCtx.clusterGroup.classList.remove('mf-cluster--dragging');
-
-      if (wasMoved) {
-        useHistoryStore.getState().commit();
-        finals.forEach(({ id, x, y }) => {
-          useDiagramStore.getState().setPositionOverride(id, { x, y });
-        });
-      }
-      clusterDragCtx = null;
-      window.removeEventListener('pointermove', onClusterPointerMove);
-      window.removeEventListener('pointerup', onClusterPointerUp);
-    };
-
     host.addEventListener('pointerdown', onPointerDown as EventListener);
     return () => {
       host.removeEventListener('pointerdown', onPointerDown as EventListener);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
-      window.removeEventListener('pointermove', onClusterPointerMove);
-      window.removeEventListener('pointerup', onClusterPointerUp);
     };
   }, [svgHostRef]);
 }
@@ -294,15 +167,4 @@ function writeTranslate(g: SVGGElement, x: number, y: number) {
 
 function cssEscape(v: string): string {
   return v.replace(/["\\]/g, '\\$&');
-}
-
-function extractClusterUserId(rawId: string): string | null {
-  // Common Mermaid patterns:
-  //   flowchart-<userId>-<n>
-  //   graph-<userId>-<n>
-  //   <userId>-<n>  (older versions)
-  const m =
-    /^(?:flowchart|graph|subgraph)-(.+)-\d+$/.exec(rawId) ??
-    /^(.+)-\d+$/.exec(rawId);
-  return m ? m[1] : rawId || null;
 }

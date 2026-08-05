@@ -7,6 +7,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useDiagramStore } from '@/stores/diagramStore';
 import { useStyleStore } from '@/stores/styleStore';
 import { useSelectionStore } from '@/stores/selectionStore';
+import { useHistoryStore } from '@/stores/historyStore';
 import { useUiStore } from '@/stores/uiStore';
 import { useMermaidRender } from '../hooks/useMermaidRender';
 import { useCanvasInteraction } from '../hooks/useCanvasInteraction';
@@ -14,6 +15,7 @@ import { useNodeDrag } from '../hooks/useNodeDrag';
 import { useEdgeDrag } from '../hooks/useEdgeDrag';
 import { routeAllEdges, expandViewBoxToFit } from '../services/edgeRouter';
 import { resizeClusters } from '../services/clusterResize';
+import { parseSubgraphMembership } from '../services/cluster/subgraphParser';
 import type { EdgeLineStyle } from '@/shared/types/diagram';
 
 export function DiagramCanvas() {
@@ -205,22 +207,154 @@ export function DiagramCanvas() {
     });
   }, [nodeStyles, edgeStyles, clusterStyles, svg, selectedNodeIds, selectedEdgeIds]);
 
-  // Wire cluster click → selectCluster. Mounted whenever the SVG changes so
-  // newly rendered clusters are always covered.
+  // Wire cluster pointerdown → drag and touchable selection.
+  // Mounted whenever the SVG changes so newly rendered clusters are always covered.
   useEffect(() => {
     const host = svgHostRef.current;
     if (!host) return;
-    const handleClusterClick = (e: MouseEvent) => {
+
+    // Get the SVG element
+    const svgEl = host.querySelector('svg');
+    if (!svgEl) return;
+
+    let clusterDragCtx: {
+      clusterId: string;
+      clusterGroup: SVGGElement;
+      nodeIds: string[];
+      nodeOriginalPositions: Map<string, { x: number; y: number }>;
+      startX: number;
+      startY: number;
+      moved: boolean;
+    } | null = null;
+
+    // Define move and up handlers first so they can be referenced in down handler
+    const handleClusterPointerMove = (e: PointerEvent) => {
+      if (!clusterDragCtx) return;
+
+      const zoom = useUiStore.getState().viewport.zoom || 1;
+      const dx = (e.clientX - clusterDragCtx.startX) / zoom;
+      const dy = (e.clientY - clusterDragCtx.startY) / zoom;
+
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) clusterDragCtx.moved = true;
+
+      const svg = clusterDragCtx.clusterGroup.ownerSVGElement;
+      if (!svg) return;
+
+      // Move all nodes in the cluster
+      clusterDragCtx.nodeIds.forEach((nodeId) => {
+        const g = svg.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nodeId)}"]`);
+        if (!g) return;
+        const orig = clusterDragCtx!.nodeOriginalPositions.get(nodeId);
+        if (orig) {
+          g.setAttribute('transform', `translate(${orig.x + dx}, ${orig.y + dy})`);
+        }
+      });
+
+      // Re-route edges and resize clusters
+      const { edgeWaypoints, edgeAnchorOverrides, source } = useDiagramStore.getState();
+      const edgeStyles = useStyleStore.getState().edgeStyles;
+      const lineStyles = new Map(
+        Object.entries(edgeStyles)
+          .filter(([, s]) => s.lineStyle)
+          .map(([id, s]) => [id, s.lineStyle!] as const),
+      );
+      routeAllEdges(svg, {
+        lineStyles,
+        waypoints: new Map(Object.entries(edgeWaypoints)),
+        anchorOverrides: new Map(Object.entries(edgeAnchorOverrides)),
+      });
+      resizeClusters(svg, source);
+      expandViewBoxToFit(svg);
+    };
+
+    const handleClusterPointerUp = () => {
+      if (!clusterDragCtx) return;
+
+      if (clusterDragCtx.moved) {
+        useHistoryStore.getState().commit();
+        const svg = clusterDragCtx.clusterGroup.ownerSVGElement;
+        if (svg) {
+          clusterDragCtx.nodeIds.forEach((nodeId) => {
+            const g = svg.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nodeId)}"]`);
+            if (!g) return;
+            const transform = g.getAttribute('transform') ?? '';
+            const m = /translate\(\s*(-?\d+(?:\.\d+)?)[\s,]+(-?\d+(?:\.\d+)?)\s*\)/.exec(transform);
+            const x = m ? Number(m[1]) : 0;
+            const y = m ? Number(m[2]) : 0;
+            useDiagramStore.getState().setPositionOverride(nodeId, { x, y });
+          });
+        }
+      }
+
+      if (clusterDragCtx) {
+        clusterDragCtx.clusterGroup.classList.remove('mf-cluster--dragging');
+      }
+      clusterDragCtx = null;
+      window.removeEventListener('pointermove', handleClusterPointerMove);
+      window.removeEventListener('pointerup', handleClusterPointerUp);
+    };
+
+    const handleClusterPointerDown = (e: PointerEvent) => {
       const target = e.target as Element | null;
       const clusterGroup = target?.closest('g.cluster') as SVGGElement | null;
       if (!clusterGroup) return;
+
       const clusterId = extractClusterUserId(clusterGroup.getAttribute('id') ?? '');
       if (!clusterId) return;
-      e.stopPropagation();
+
+      // Select the cluster
       useSelectionStore.getState().selectCluster(clusterId);
+
+      // Mermaid renders nodes in g.nodes and clusters in g.clusters as siblings —
+      // node <g> elements are NOT children of the cluster <g>. Use the source
+      // parser to discover which node IDs belong to this cluster.
+      const source = useDiagramStore.getState().source;
+      const membership = parseSubgraphMembership(source);
+      const clusterMembers = membership.get(clusterId) ?? new Set<string>();
+
+      const nodeIds: string[] = [];
+      const nodeOriginalPositions = new Map<string, { x: number; y: number }>();
+
+      const svg = clusterGroup.ownerSVGElement;
+      if (!svg) return;
+
+      svg.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
+        const nodeId = g.getAttribute('data-node-id');
+        if (nodeId && clusterMembers.has(nodeId)) {
+          nodeIds.push(nodeId);
+          const transform = g.getAttribute('transform') ?? '';
+          const m = /translate\(\s*(-?\d+(?:\.\d+)?)[\s,]+(-?\d+(?:\.\d+)?)\s*\)/.exec(transform);
+          const x = m ? Number(m[1]) : 0;
+          const y = m ? Number(m[2]) : 0;
+          nodeOriginalPositions.set(nodeId, { x, y });
+        }
+      });
+
+      if (nodeIds.length === 0) return;
+
+      clusterDragCtx = {
+        clusterId,
+        clusterGroup,
+        nodeIds,
+        nodeOriginalPositions,
+        startX: e.clientX,
+        startY: e.clientY,
+        moved: false,
+      };
+
+      clusterGroup.classList.add('mf-cluster--dragging');
+      e.stopPropagation();
+      window.addEventListener('pointermove', handleClusterPointerMove as EventListener);
+      window.addEventListener('pointerup', handleClusterPointerUp as EventListener);
     };
-    host.addEventListener('click', handleClusterClick);
-    return () => host.removeEventListener('click', handleClusterClick);
+
+    // Attach pointerdown listener directly to SVG element with capture phase
+    svgEl.addEventListener('pointerdown', handleClusterPointerDown as EventListener, true);
+    return () => {
+      svgEl.removeEventListener('pointerdown', handleClusterPointerDown as EventListener, true);
+      window.removeEventListener('pointermove', handleClusterPointerMove as EventListener);
+      window.removeEventListener('pointerup', handleClusterPointerUp as EventListener);
+    };
   }, [svg]);
 
   // Wire edge click → selectEdge. Mounted whenever the SVG changes so
