@@ -78,7 +78,7 @@ export function restoreAutoSave(): boolean {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return false;
     const file = JSON.parse(raw);
-    if (file?.version !== '1.0' && file?.version !== '1.1') return false;
+    if (file?.version !== '1.0' && file?.version !== '1.1' && file?.version !== '1.2') return false;
     hydrateFromFile(file);
     startAutoSave();
     return true;
