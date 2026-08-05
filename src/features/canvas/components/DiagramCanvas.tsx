@@ -166,10 +166,36 @@ export function DiagramCanvas() {
         );
       });
 
-      const text = g.querySelector('text, .nodeLabel') as HTMLElement | null;
-      if (text) {
-        setImportantStyle(text, 'color', style.fontColor ?? '');
-        setImportantStyle(text, 'font-size', style.fontSize != null ? `${style.fontSize}px` : '');
+      // For text color: honour an explicit fontColor override first.
+      // If only a fill is set (no explicit fontColor), auto-derive a
+      // contrasting color so the label stays readable. Clear both when
+      // there's no override so Mermaid's theme CSS wins.
+      const autoTextColor =
+        style.fontColor ? style.fontColor
+        : style.fill     ? contrastColor(style.fill)
+        : '';
+
+      // Nodes use htmlLabels:true — label lives in foreignObject > div > span.nodeLabel.
+      // Set color on the span directly (Mermaid's theme CSS targets it) and
+      // on the wrapping div as a cascade fallback.
+      const labelG = g.querySelector<SVGGElement>('g.label');
+      const fo = labelG?.querySelector<SVGForeignObjectElement>('foreignObject');
+      if (fo) {
+        fo.querySelectorAll<HTMLElement>('span.nodeLabel, span[class*="nodeLabel"]').forEach((s) => {
+          setImportantStyle(s, 'color', autoTextColor);
+        });
+        const wrapDiv = fo.querySelector<HTMLElement>('div');
+        if (wrapDiv) setImportantStyle(wrapDiv, 'color', autoTextColor);
+      }
+      // SVG text fallback (non-htmlLabels diagrams).
+      g.querySelectorAll<SVGTextElement>('text').forEach((t) => {
+        setImportantStyle(t, 'fill', autoTextColor);
+      });
+
+      // Font size (independent of color).
+      const anyText = g.querySelector<HTMLElement | SVGTextElement>('text, .nodeLabel');
+      if (anyText) {
+        setImportantStyle(anyText, 'font-size', style.fontSize != null ? `${style.fontSize}px` : '');
       }
     });
 
