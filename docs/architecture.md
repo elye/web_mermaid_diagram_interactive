@@ -12,7 +12,7 @@ src/
 ├── app/                            # App shell, providers, layout
 ├── stores/                         # Zustand stores (single source of truth)
 │   ├── diagramStore.ts             # Source, rendered SVG, node meta, position overrides
-│   ├── selectionStore.ts           # Selected node/edge IDs
+│   ├── selectionStore.ts           # Selected node/edge/cluster IDs (mutually exclusive)
 │   ├── styleStore.ts               # Per-element style overrides, annotations
 │   ├── uiStore.ts                  # Theme, viewport, toasts, panel state
 │   └── historyStore.ts             # Undo/redo snapshots
@@ -20,7 +20,7 @@ src/
 │   ├── editor/                     # CodeMirror + toolbar + syntax error panel
 │   ├── canvas/                     # Mermaid render pipeline + interaction
 │   │   ├── components/             # DiagramCanvas, CanvasControls
-│   │   ├── hooks/                  # useMermaidRender, useCanvasInteraction, useNodeDrag
+│   │   ├── hooks/                  # useMermaidRender, useCanvasInteraction, useNodeDrag, useClusterDrag
 │   │   └── services/               # See "Canvas services" below
 │   ├── file-io/                    # Drag-drop, .mermaidflow serialise/parse, PNG/SVG export, autosave
 │   ├── styling/                    # Properties panel + preset chips
@@ -31,27 +31,27 @@ src/
 ## Canvas services
 
 The canvas is the most substantive piece of the app: it wraps Mermaid, injects
-interactive metadata, keeps edges anchored to their nodes across drags, and
-grows the viewBox as content moves. To keep files small and testable, the
-pipeline is decomposed into layers, each importable through the
-`services/index.ts` barrel.
+interactive metadata, keeps edges anchored to their nodes across drags, resizes
+subgraph clusters to keep wrapping their members, and grows the viewBox as
+content moves. To keep files small and testable, the pipeline is decomposed
+into layers, each importable through the `services/index.ts` barrel.
 
 ```
-                         ┌───────────────────────────────────────────────┐
-   DiagramCanvas ▶ ─────▶│  services/index.ts (barrel, re-exports below) │
-   useNodeDrag   ▶ ─────▶└───────────────────────────────────────────────┘
+                         ┌────────────────────────────────────────────────┐
+   DiagramCanvas ▶ ─────▶│  services/index.ts (barrel, re-exports below)  │
+   useNodeDrag   ▶ ─────▶└────────────────────────────────────────────────┘
                                           │
-     ┌───────────────┬────────────────────┼────────────────────┬─────────────────┐
-     ▼               ▼                    ▼                    ▼                 ▼
- renderEngine   svgManipulator       routing/             viewbox.ts         svg/
-     │               │                    │                    │                 │
-   Mermaid       annotates            routeAllEdges       expandViewBox    parseTranslate
-    → svg         data-node-id,       + fallback           to fit all       groupBBox
-                  data-edge-*,        endpoint infer       node rects       localBBox
-                  data-edge-id                                              pathEndpoints
-                  on labels           anchors ─┐                            pathMidpoint
-                                      paths ───┤ (pure geometry)
-                                      endpointInference ─┘
+     ┌───────────────┬─────────┬─────────┼─────────┬─────────────────┐
+     ▼               ▼         ▼         ▼         ▼                 ▼
+ renderEngine   svgManipulator routing/ viewbox.ts svg/           cluster/
+     │               │            │         │         │                 │
+   Mermaid       annotates   routeAllEdges expandVB  parseTranslate  resizeClusters
+    → svg         data-node-id,  + fallback  to fit    groupBBox     (subgraph
+                  data-edge-*,   endpoint    all node  localBBox      wrapping)
+                  data-edge-id   infer       rects     pathEndpoints
+                  on labels      anchors ─┐            pathMidpoint
+                                 paths ───┤ (pure geometry)
+                                 endpointInference ─┘
 ```
 
 ### `services/svg/` — DOM primitives
@@ -62,9 +62,10 @@ and return typed `BBox` / `Point` values from `@/shared/types/diagram`.
 
 | File              | Responsibility |
 | ----------------- | -------------- |
-| `transforms.ts`   | Parse `translate(x, y)` attributes. |
+| `transforms.ts`   | Parse `translate(x, y)` attributes; `readTranslate`/`writeTranslate` DOM helpers; `cssEscape` for selector safety. |
 | `shapeBBox.ts`    | Compute the root-space bbox of a Mermaid node — composing the group's `translate` with the shape child's own `translate` (crucial for diamonds/hexagons whose polygon carries its own transform to center itself). Also provides `fallbackBBox` when a shape can't be measured. |
 | `pathGeometry.ts` | Extract endpoints from a path's `d` attribute; compute a midpoint with a `getTotalLength`/`getPointAtLength` fast path and a jsdom-safe analytic fallback. |
+| `styleUtils.ts`   | `contrastColor(css)` — WCAG-based light/dark contrast picker for auto label colors; `setImportantStyle(el, prop, value)` — sets or removes inline `!important` styles so overrides beat Mermaid's `classDef` rules. |
 
 ### `services/routing/` — edge (re)routing
 
@@ -89,6 +90,27 @@ Pure string helpers that decode Mermaid's node/edge id conventions:
 
 Handles the ambiguity that arises when user ids themselves contain the
 separator character by testing every split against a set of known ids.
+
+### `services/cluster/` — subgraph cluster resizing
+
+Mermaid lays out subgraph clusters (the labeled bounding boxes drawn behind
+member nodes) once at render time; it never updates them afterward. This
+sub-pipeline recomputes each cluster's rect from the **current** node
+positions so dragging a node keeps its enclosing cluster wrapped tightly
+around it.
+
+| File                  | Responsibility |
+| --------------------- | -------------- |
+| `subgraphParser.ts`   | Parses Mermaid source (`parseSubgraphMembership`) into `subgraphId → Set<memberIds>`, handling arbitrarily deep `subgraph ... end` nesting. `collectAllNodeIds(clusterId, membership)` recursively resolves a cluster to its leaf node IDs (used by `useClusterDrag`). This is the only way to recover membership — cluster `<g>`s are NOT DOM ancestors of their member nodes; they're flat siblings. |
+| `clusterElements.ts`  | DOM readers: `collectClusterElements` / `collectNodeBBoxes` / `clusterElementBBox`; also exports `extractClusterUserId` (strips `flowchart-`/`graph-` prefix and `-<counter>` suffix). |
+| `topoOrder.ts`        | Post-order traversal of the subgraph containment tree so nested clusters are resized leaf-first — a parent cluster's bbox union must see its child cluster's *already-resized* bbox. |
+| `resize.ts`           | `resizeClusters(svg, source)` — the orchestrator. Unions member bboxes (nodes and/or nested cluster bboxes) per subgraph, adds padding (extra headroom on top for the label), and rewrites the cluster's `transform` + `<rect>` + label position. |
+
+Exposed via the `./cluster` barrel and the backwards-compatible
+`services/clusterResize.ts` (same pattern as `edgeRouter.ts` for `routing/`).
+Called after every `routeAllEdges` pass in both `DiagramCanvas`'s render
+effect and `useNodeDrag`, so clusters stay correct on both full re-renders
+and live drags.
 
 ### `services/viewbox.ts`
 
@@ -119,6 +141,11 @@ surface (`routeAllEdges`, `nodeRect`, `anchorOn`, `bezierPath`,
 New code should import from `services/` (or the narrower sub-barrels)
 directly.
 
+### `services/clusterResize.ts`
+
+Same back-compat pattern as `edgeRouter.ts`, but for the `cluster/`
+sub-pipeline: re-exports `resizeClusters` and `parseSubgraphMembership`.
+
 ### Canvas interaction hooks
 
 Two SVG-touching hooks share the same "read from stores → mutate live DOM"
@@ -126,10 +153,11 @@ pattern; they never re-render React during a drag.
 
 | File                | Responsibility |
 | ------------------- | -------------- |
-| `useNodeDrag.ts`    | Pointer-event lifecycle for node dragging + incident-edge rerouting. |
+| `useNodeDrag.ts`    | Pointer-event lifecycle for node dragging + incident-edge rerouting. Uses shared `readTranslate`/`writeTranslate`/`cssEscape` from `services/svg`. |
+| `useClusterDrag.ts` | Pointer-event lifecycle for subgraph cluster dragging. On `pointerdown` over a `g.cluster`: selects the cluster, resolves member node IDs via `parseSubgraphMembership` + `collectAllNodeIds`, and translates all member nodes together by the same delta. On release, persists final positions to `diagramStore.positionOverrides` and commits a history snapshot. |
 | `useEdgeDrag.ts`    | Pointer-event lifecycle for waypoint and anchor drags. History commit fires on the first move-that-mutates so undo restores the pre-drag state. |
 | `edgeHandles.ts`    | Injects `.mf-edge-handle` circles (waypoint ● + anchor ◯) into the SVG for every selected edge, and re-injects them on every dep change so a full SVG re-render doesn't strand them. |
-| `edgeDragUtils.ts`  | Shared drag helpers: `svgPoint` (client → SVG coords via `CTM`), `buildLineStyleMap`, `cssEscape`. |
+| `edgeDragUtils.ts`  | Shared drag helpers: `svgPoint` (client → SVG coords via `CTM`), `buildLineStyleMap`. |
 
 ## Data flow
 
@@ -141,12 +169,15 @@ flowchart LR
   renderEngine -->|annotated svg + node/edge meta| diagramStore
   diagramStore -->|svg| DiagramCanvas
   DiagramCanvas -.->|node drag| positionOverrides
+  DiagramCanvas -.->|cluster drag| positionOverrides
   DiagramCanvas -.->|edge click| selectionStore
   positionOverrides --> DiagramCanvas
   DiagramCanvas -->|select node| selectionStore
+  DiagramCanvas -->|select cluster| selectionStore
   selectionStore --> PropertiesPanel
   PropertiesPanel -->|set node style| styleStore
   PropertiesPanel -->|set edge style/lineStyle| styleStore
+  PropertiesPanel -->|set cluster style| styleStore
   PropertiesPanel -->|set lineStyle / clear waypoints| diagramStore
   styleStore --> DiagramCanvas
   DiagramCanvas -.->|waypoint drag| edgeWaypoints
@@ -171,8 +202,19 @@ flowchart LR
 5. `useNodeDrag` listens for pointer events on `[data-node-id]` groups. Each
    pointer-move updates the dragged group's transform, calls `routeAllEdges`
    (with line-style / waypoint / anchor-override maps read from the stores) to
-   rewrite the `d` of every incident edge (and reposition edge labels), then
-   calls `expandViewBoxToFit`.
+   rewrite the `d` of every incident edge (and reposition edge labels), calls
+   `resizeClusters` so any enclosing subgraph cluster rect keeps wrapping the
+   dragged node, then calls `expandViewBoxToFit`. `DiagramCanvas`'s render
+   effect runs the same `routeAllEdges` → `resizeClusters` → `expandViewBoxToFit`
+   sequence whenever position overrides change outside of a live drag (e.g.
+   after an undo/redo or autosave restore).
+5a. `useClusterDrag` listens (with capture) for `pointerdown` on `g.cluster`
+    elements. It selects the cluster, discovers all its leaf node IDs from the
+    live Mermaid source (via `parseSubgraphMembership` + `collectAllNodeIds`),
+    and translates each member node together on `pointermove` — same
+    edge-rerouting and cluster-resizing passes as `useNodeDrag`. On
+    `pointerup`, final positions are written to `diagramStore.positionOverrides`
+    and a history snapshot is committed so the move is undoable.
 6. `useEdgeDrag` listens for pointer events on `.mf-edge-handle` circles
    that are injected into the live SVG by `injectEdgeHandles`. Two kinds:
    - **Waypoint handles** (●) — drag to reshape a curve-mode edge. Persisted
@@ -220,8 +262,8 @@ undo keystroke.
   `flushAutoSave()` which cancels the pending timer and writes synchronously,
   so a mutation made in the last few hundred ms before a refresh is not lost.
 - **Restore.** `restoreAutoSave()` reads the snapshot and hydrates all three
-  stores. Accepts both `v1.0` (legacy — no edge state) and `v1.1` files;
-  missing v1.1 fields default to empty maps.
+  stores. Accepts `v1.0` (legacy — no edge state), `v1.1`, and `v1.2` files;
+  `v1.2` adds `clusterStyles` for per-subgraph fill/stroke overrides.
 
 ### History (`stores/historyStore.ts`)
 
@@ -238,6 +280,17 @@ undo keystroke.
   `edgeWaypoints`. The dep list now includes it, so any store-level change
   (undo, redo, file load, autosave restore) re-injects the handles at the
   new coordinates.
+- **`commitCoalesced(key)`** — used by `PropertiesPanel` for controls that
+  fire many events per logical edit (stroke-width slider drag, rapid preset
+  clicks). Only the first call for a given `key` (the selected node/edge id
+  set) pushes a history entry; later same-key calls within an 800ms idle
+  window just extend it. This keeps "drag a slider" or "click through a few
+  presets on the same node" a single undo step instead of one per tick. A
+  plain `commit()` (drag, reset-all, file load) always closes any pending
+  coalesce session first, so the next edit starts fresh.
+- The toolbar's Undo/Redo buttons are `disabled` when `past`/`future` are
+  empty (`useHistoryStore((s) => s.past.length > 0)`), so there's no
+  visually-active button that's actually a no-op.
 
 ## Design invariants
 
@@ -246,9 +299,13 @@ undo keystroke.
 - **Composed transforms.** Every bbox composes group translate + shape
   translate. The polygon-transform bug (diamonds appearing disconnected)
   taught us to never trust `points` in isolation.
-- **Idempotent routing.** `routeAllEdges` and `expandViewBoxToFit` may be
-  called any number of times per frame; they always produce the same output
-  for a given SVG state.
+- **Idempotent routing.** `routeAllEdges`, `resizeClusters`, and
+  `expandViewBoxToFit` may be called any number of times per frame; they
+  always produce the same output for a given SVG state.
+- **Cluster membership comes from source, not the DOM.** Mermaid's rendered
+  cluster `<g>` is a flat sibling of the nodes group, not their DOM ancestor,
+  so `resizeClusters` re-derives membership by parsing the live Mermaid
+  source (`parseSubgraphMembership`) rather than the SVG tree.
 - **Positional edge-label matching.** Mermaid does not put an `id` on
   `g.edgeLabel`, but it emits labels in the same DOM order as edges — the
   only reliable link between the two.

@@ -12,13 +12,14 @@ export function buildFileObject(): MermaidFlowFile {
   const u = useUiStore.getState();
   const now = new Date().toISOString();
   return {
-    version: '1.1',
+    version: '1.2',
     mermaidSource: d.source,
     positionOverrides: d.positionOverrides,
     styleOverrides: s.nodeStyles,
     edgeStyles: s.edgeStyles,
     edgeWaypoints: d.edgeWaypoints,
     edgeAnchorOverrides: d.edgeAnchorOverrides,
+    clusterStyles: s.clusterStyles,
     annotations: s.annotations,
     theme: u.theme,
     viewportState: u.viewport,

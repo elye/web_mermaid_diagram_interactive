@@ -21,6 +21,8 @@ import { useSelectionStore } from '@/stores/selectionStore';
 import { useHistoryStore } from '@/stores/historyStore';
 import { useUiStore } from '@/stores/uiStore';
 import { routeAllEdges, expandViewBoxToFit } from '../services/edgeRouter';
+import { resizeClusters } from '../services/clusterResize';
+import { readTranslate, writeTranslate, cssEscape } from '../services/svg';
 
 interface DragTarget {
   id: string;
@@ -47,6 +49,8 @@ export function useNodeDrag(svgHostRef: React.RefObject<HTMLElement>) {
 
     const onPointerDown = (e: PointerEvent) => {
       const target = e.target as Element | null;
+
+      // Handle normal node drag (clusters are handled via click in DiagramCanvas)
       const group = target?.closest('g[data-node-id]') as SVGGElement | null;
       if (!group) return;
 
@@ -118,6 +122,8 @@ export function useNodeDrag(svgHostRef: React.RefObject<HTMLElement>) {
         waypoints: new Map(Object.entries(edgeWaypoints)),
         anchorOverrides: new Map(Object.entries(edgeAnchorOverrides)),
       });
+      // Resize subgraph cluster rectangles to keep wrapping their members.
+      resizeClusters(ctx.svg, useDiagramStore.getState().source);
       expandViewBoxToFit(ctx.svg);
     };
 
@@ -150,16 +156,4 @@ export function useNodeDrag(svgHostRef: React.RefObject<HTMLElement>) {
   }, [svgHostRef]);
 }
 
-function readTranslate(g: SVGGElement): { x: number; y: number } {
-  const t = g.getAttribute('transform') ?? '';
-  const m = /translate\(\s*(-?\d+(?:\.\d+)?)[\s,]+(-?\d+(?:\.\d+)?)\s*\)/.exec(t);
-  return { x: m ? Number(m[1]) : 0, y: m ? Number(m[2]) : 0 };
-}
 
-function writeTranslate(g: SVGGElement, x: number, y: number) {
-  g.setAttribute('transform', `translate(${x}, ${y})`);
-}
-
-function cssEscape(v: string): string {
-  return v.replace(/["\\]/g, '\\$&');
-}

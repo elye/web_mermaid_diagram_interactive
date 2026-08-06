@@ -24,9 +24,16 @@ export function Layout() {
             </div>
           }
           right={
-            <div className="relative h-full w-full">
-              <DiagramCanvas />
-              <CanvasControls />
+            <div className="flex h-full w-full flex-row">
+              {/*
+                Canvas area is a flex sibling of the properties sidebar (not
+                an absolute overlay) so a selected node/edge is never hidden
+                behind the panel — the canvas reflows to make room instead.
+               */}
+              <div className="relative h-full min-w-0 flex-1">
+                <DiagramCanvas />
+                <CanvasControls />
+              </div>
               <PropertiesPanel />
             </div>
           }

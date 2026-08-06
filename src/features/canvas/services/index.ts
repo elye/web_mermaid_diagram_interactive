@@ -8,9 +8,9 @@
  *  │             ▼                                               │
  *  │  services/index.ts  ◀─ import from here ─▶                  │
  *  │             │                                               │
- *  │   ┌─────────┼──────────┬──────────────┬──────────────┐      │
- *  │   ▼         ▼          ▼              ▼              ▼      │
- *  │ renderEngine  svgManipulator  routing/*  viewbox  svg/*     │
+ *  │   ┌─────────┼──────────┬──────────────┬──────────────┬──────────┐ │
+ *  │   ▼         ▼          ▼              ▼              ▼          ▼ │
+ *  │ renderEngine  svgManipulator  routing/*  viewbox  svg/*  cluster/* │
  *  └─────────────────────────────────────────────────────────────┘
  * ```
  *
@@ -28,3 +28,4 @@ export { routeAllEdges, nodeRect, anchorOn, bezierPath, selfLoopPath, nearestNod
 export { expandViewBoxToFit } from './viewbox';
 export { extractUserNodeId, extractEdgeEndpoints } from './edgeIds';
 export { groupBBox, localBBox, fallbackBBox, parseTranslate, pathEndpoints, pathMidpoint } from './svg';
+export { resizeClusters, parseSubgraphMembership } from './cluster';
