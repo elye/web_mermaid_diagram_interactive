@@ -444,10 +444,10 @@ const NODE_PRESETS = [
 ] as const;
 
 const CLUSTER_PRESETS: { name: string; labelColor: string; style: StyleOverride }[] = [
-  { name: 'Blue',    labelColor: '#1e3a5f', style: { fill: '#dbeafe', stroke: '#3b82f6' } },
-  { name: 'Green',   labelColor: '#14532d', style: { fill: '#dcfce7', stroke: '#16a34a' } },
-  { name: 'Yellow',  labelColor: '#78350f', style: { fill: '#fef3c7', stroke: '#d97706' } },
-  { name: 'Red',     labelColor: '#7f1d1d', style: { fill: '#fee2e2', stroke: '#dc2626' } },
-  { name: 'Purple',  labelColor: '#3b0764', style: { fill: '#f3e8ff', stroke: '#9333ea' } },
-  { name: 'Slate',   labelColor: '#1e293b', style: { fill: '#f1f5f9', stroke: '#64748b' } },
+  { name: 'Blue',    labelColor: '#e0e7ff', style: { fill: '#1e3a8a', stroke: '#3b82f6' } },
+  { name: 'Green',   labelColor: '#dcfce7', style: { fill: '#15803d', stroke: '#16a34a' } },
+  { name: 'Yellow',  labelColor: '#fef3c7', style: { fill: '#854d0e', stroke: '#d97706' } },
+  { name: 'Red',     labelColor: '#fee2e2', style: { fill: '#7f1d1d', stroke: '#dc2626' } },
+  { name: 'Purple',  labelColor: '#f3e8ff', style: { fill: '#581c87', stroke: '#9333ea' } },
+  { name: 'Slate',   labelColor: '#f1f5f9', style: { fill: '#1e293b', stroke: '#64748b' } },
 ];
