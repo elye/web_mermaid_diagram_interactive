@@ -22,3 +22,27 @@ export function parseTranslate(transform: string | null | undefined): Point {
   const m = TRANSLATE_RE.exec(transform);
   return m ? { x: Number(m[1]), y: Number(m[2]) } : { x: 0, y: 0 };
 }
+
+/**
+ * Read the current `translate(x, y)` of a `<g>` element.
+ * Convenience wrapper over `parseTranslate` that reads from an element.
+ */
+export function readTranslate(g: SVGGElement): Point {
+  return parseTranslate(g.getAttribute('transform'));
+}
+
+/**
+ * Write a `translate(x, y)` transform onto a `<g>` element.
+ */
+export function writeTranslate(g: SVGGElement, x: number, y: number): void {
+  g.setAttribute('transform', `translate(${x}, ${y})`);
+}
+
+/**
+ * Minimal CSS selector escaping for dynamic attribute selectors.
+ * Escapes `"` and `\` which are the only characters that would break the
+ * `[data-node-id="…"]` selector pattern used in this app.
+ */
+export function cssEscape(v: string): string {
+  return v.replace(/["\\]/g, '\\$&');
+}

@@ -29,6 +29,11 @@ export function collectAllNodeIds(
   membership: Map<string, Set<string>>,
 ): Set<string> {
   const result = new Set<string>();
+
+  // Guard: if the clusterId isn't in the membership map at all, there are no
+  // leaf nodes to collect (it's not a known subgraph in the source).
+  if (!membership.has(clusterId)) return result;
+
   const visited = new Set<string>(); // guard against cycles
 
   function visit(id: string) {

@@ -4,4 +4,5 @@
  * than reaching into individual sub-modules.
  */
 export { resizeClusters } from './resize';
-export { parseSubgraphMembership } from './subgraphParser';
+export { parseSubgraphMembership, collectAllNodeIds } from './subgraphParser';
+export { extractClusterUserId } from './clusterElements';

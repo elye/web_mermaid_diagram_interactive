@@ -26,8 +26,11 @@ export function collectClusterElements(svg: SVGSVGElement): Map<string, SVGGElem
 /**
  * Strip Mermaid's `flowchart-` prefix and trailing `-<counter>` suffix.
  * E.g. `flowchart-mySubgraph-7` → `mySubgraph`.
+ *
+ * Exported so consumers (DiagramCanvas, tests) can share the same logic
+ * rather than each maintaining their own copy.
  */
-function extractClusterUserId(rawId: string): string | null {
+export function extractClusterUserId(rawId: string): string | null {
   // Common Mermaid patterns:
   //   flowchart-<userId>-<n>
   //   graph-<userId>-<n>

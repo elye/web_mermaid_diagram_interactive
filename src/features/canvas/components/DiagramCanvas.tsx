@@ -1,21 +1,23 @@
 /**
  * DiagramCanvas — mounts the rendered SVG, applies viewport transform,
- * wires pan/zoom and node-drag interactions, and applies style overrides
- * & position overrides on each render.
+ * wires pan/zoom, node-drag, cluster-drag and edge-drag interactions, and
+ * applies style overrides & position overrides on each render.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useDiagramStore } from '@/stores/diagramStore';
 import { useStyleStore } from '@/stores/styleStore';
 import { useSelectionStore } from '@/stores/selectionStore';
-import { useHistoryStore } from '@/stores/historyStore';
 import { useUiStore } from '@/stores/uiStore';
 import { useMermaidRender } from '../hooks/useMermaidRender';
 import { useCanvasInteraction } from '../hooks/useCanvasInteraction';
 import { useNodeDrag } from '../hooks/useNodeDrag';
+import { useClusterDrag } from '../hooks/useClusterDrag';
 import { useEdgeDrag } from '../hooks/useEdgeDrag';
 import { routeAllEdges, expandViewBoxToFit } from '../services/edgeRouter';
 import { resizeClusters } from '../services/clusterResize';
-import { parseSubgraphMembership, collectAllNodeIds } from '../services/cluster/subgraphParser';
+import { extractClusterUserId } from '../services/cluster/clusterElements';
+import { contrastColor, setImportantStyle } from '../services/svg/styleUtils';
+import { cssEscape } from '../services/svg';
 import type { EdgeLineStyle } from '@/shared/types/diagram';
 
 export function DiagramCanvas() {
@@ -66,6 +68,7 @@ export function DiagramCanvas() {
 
   const { onPointerDown } = useCanvasInteraction(containerRef);
   useNodeDrag(svgHostRef);
+  useClusterDrag(svgHostRef, svg);
   useEdgeDrag(svgHostRef, edgeDragDeps);
 
   // Inject SVG into DOM, then snapshot each node's natural (Mermaid-computed)
@@ -266,157 +269,6 @@ export function DiagramCanvas() {
     });
   }, [nodeStyles, edgeStyles, clusterStyles, svg, selectedNodeIds, selectedEdgeIds]);
 
-  // Wire cluster pointerdown → drag and touchable selection.
-  // Mounted whenever the SVG changes so newly rendered clusters are always covered.
-  useEffect(() => {
-    const host = svgHostRef.current;
-    if (!host) return;
-
-    // Get the SVG element
-    const svgEl = host.querySelector('svg');
-    if (!svgEl) return;
-
-    let clusterDragCtx: {
-      clusterId: string;
-      clusterGroup: SVGGElement;
-      nodeIds: string[];
-      nodeOriginalPositions: Map<string, { x: number; y: number }>;
-      startX: number;
-      startY: number;
-      moved: boolean;
-    } | null = null;
-
-    // Define move and up handlers first so they can be referenced in down handler
-    const handleClusterPointerMove = (e: PointerEvent) => {
-      if (!clusterDragCtx) return;
-
-      const zoom = useUiStore.getState().viewport.zoom || 1;
-      const dx = (e.clientX - clusterDragCtx.startX) / zoom;
-      const dy = (e.clientY - clusterDragCtx.startY) / zoom;
-
-      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) clusterDragCtx.moved = true;
-
-      const svg = clusterDragCtx.clusterGroup.ownerSVGElement;
-      if (!svg) return;
-
-      // Move all nodes in the cluster
-      clusterDragCtx.nodeIds.forEach((nodeId) => {
-        const g = svg.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nodeId)}"]`);
-        if (!g) return;
-        const orig = clusterDragCtx!.nodeOriginalPositions.get(nodeId);
-        if (orig) {
-          g.setAttribute('transform', `translate(${orig.x + dx}, ${orig.y + dy})`);
-        }
-      });
-
-      // Re-route edges and resize clusters
-      const { edgeWaypoints, edgeAnchorOverrides, source } = useDiagramStore.getState();
-      const edgeStyles = useStyleStore.getState().edgeStyles;
-      const lineStyles = new Map(
-        Object.entries(edgeStyles)
-          .filter(([, s]) => s.lineStyle)
-          .map(([id, s]) => [id, s.lineStyle!] as const),
-      );
-      routeAllEdges(svg, {
-        lineStyles,
-        waypoints: new Map(Object.entries(edgeWaypoints)),
-        anchorOverrides: new Map(Object.entries(edgeAnchorOverrides)),
-      });
-      resizeClusters(svg, source);
-      expandViewBoxToFit(svg);
-    };
-
-    const handleClusterPointerUp = () => {
-      if (!clusterDragCtx) return;
-
-      if (clusterDragCtx.moved) {
-        useHistoryStore.getState().commit();
-        const svg = clusterDragCtx.clusterGroup.ownerSVGElement;
-        if (svg) {
-          clusterDragCtx.nodeIds.forEach((nodeId) => {
-            const g = svg.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nodeId)}"]`);
-            if (!g) return;
-            const transform = g.getAttribute('transform') ?? '';
-            const m = /translate\(\s*(-?\d+(?:\.\d+)?)[\s,]+(-?\d+(?:\.\d+)?)\s*\)/.exec(transform);
-            const x = m ? Number(m[1]) : 0;
-            const y = m ? Number(m[2]) : 0;
-            useDiagramStore.getState().setPositionOverride(nodeId, { x, y });
-          });
-        }
-      }
-
-      if (clusterDragCtx) {
-        clusterDragCtx.clusterGroup.classList.remove('mf-cluster--dragging');
-      }
-      clusterDragCtx = null;
-      window.removeEventListener('pointermove', handleClusterPointerMove);
-      window.removeEventListener('pointerup', handleClusterPointerUp);
-    };
-
-    const handleClusterPointerDown = (e: PointerEvent) => {
-      const target = e.target as Element | null;
-      const clusterGroup = target?.closest('g.cluster') as SVGGElement | null;
-      if (!clusterGroup) return;
-
-      const clusterId = extractClusterUserId(clusterGroup.getAttribute('id') ?? '');
-      if (!clusterId) return;
-
-      // Select the cluster
-      useSelectionStore.getState().selectCluster(clusterId);
-
-      // Mermaid renders nodes in g.nodes and clusters in g.clusters as siblings —
-      // node <g> elements are NOT children of the cluster <g>. Use the source
-      // parser to discover which node IDs belong to this cluster.
-      const source = useDiagramStore.getState().source;
-      const membership = parseSubgraphMembership(source);
-      // Recursively collect all leaf node IDs (handles nested subgraphs)
-      const allNodeIds = collectAllNodeIds(clusterId, membership);
-
-      const nodeIds: string[] = [];
-      const nodeOriginalPositions = new Map<string, { x: number; y: number }>();
-
-      const svg = clusterGroup.ownerSVGElement;
-      if (!svg) return;
-
-      svg.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
-        const nodeId = g.getAttribute('data-node-id');
-        if (nodeId && allNodeIds.has(nodeId)) {
-          nodeIds.push(nodeId);
-          const transform = g.getAttribute('transform') ?? '';
-          const m = /translate\(\s*(-?\d+(?:\.\d+)?)[\s,]+(-?\d+(?:\.\d+)?)\s*\)/.exec(transform);
-          const x = m ? Number(m[1]) : 0;
-          const y = m ? Number(m[2]) : 0;
-          nodeOriginalPositions.set(nodeId, { x, y });
-        }
-      });
-
-      if (nodeIds.length === 0) return;
-
-      clusterDragCtx = {
-        clusterId,
-        clusterGroup,
-        nodeIds,
-        nodeOriginalPositions,
-        startX: e.clientX,
-        startY: e.clientY,
-        moved: false,
-      };
-
-      clusterGroup.classList.add('mf-cluster--dragging');
-      e.stopPropagation();
-      window.addEventListener('pointermove', handleClusterPointerMove as EventListener);
-      window.addEventListener('pointerup', handleClusterPointerUp as EventListener);
-    };
-
-    // Attach pointerdown listener directly to SVG element with capture phase
-    svgEl.addEventListener('pointerdown', handleClusterPointerDown as EventListener, true);
-    return () => {
-      svgEl.removeEventListener('pointerdown', handleClusterPointerDown as EventListener, true);
-      window.removeEventListener('pointermove', handleClusterPointerMove as EventListener);
-      window.removeEventListener('pointerup', handleClusterPointerUp as EventListener);
-    };
-  }, [svg]);
-
   // Wire edge click → selectEdge. Mounted whenever the SVG changes so
   // newly rendered edges are always covered.
   useEffect(() => {
@@ -496,60 +348,4 @@ export function DiagramCanvas() {
   );
 }
 
-function cssEscape(v: string): string {
-  return v.replace(/["\\]/g, '\\$&');
-}
 
-/**
- * Given any CSS color string, return '#000000' or '#ffffff' whichever
- * gives better contrast against it (WCAG relative luminance formula).
- */
-function contrastColor(css: string): string {
-  // Parse via canvas so we handle any CSS color format.
-  try {
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = 1;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return '#000000';
-    ctx.fillStyle = css;
-    ctx.fillRect(0, 0, 1, 1);
-    const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
-    if (a < 10) return '#000000'; // transparent — default dark
-    // sRGB linearisation then relative luminance (WCAG 2.1)
-    const toLinear = (c: number) => {
-      const s = c / 255;
-      return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-    };
-    const L = 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
-    return L > 0.179 ? '#000000' : '#ffffff';
-  } catch {
-    return '#000000';
-  }
-}
-
-function extractClusterUserId(rawId: string): string | null {
-  // Common Mermaid patterns:
-  //   flowchart-<userId>-<n>
-  //   graph-<userId>-<n>
-  //   <userId>-<n>  (older versions)
-  const m =
-    /^(?:flowchart|graph|subgraph)-(.+)-\d+$/.exec(rawId) ??
-    /^(.+)-\d+$/.exec(rawId);
-  return m ? m[1] : rawId || null;
-}
-
-/**
- * Set (or clear, when `value` is `''`) an inline style property with
- * `!important` priority. Mermaid's `classDef`/`class` directive emits its
- * own `!important` CSS rules (e.g. `.src>* { fill: ...!important; }`), so a
- * plain (non-important) inline style would silently lose to it. Clearing
- * uses `removeProperty` so Mermaid's own styling (classDef or default) wins
- * again once there's no override.
- */
-function setImportantStyle(el: SVGElement | HTMLElement, prop: string, value: string): void {
-  if (value) {
-    el.style.setProperty(prop, value, 'important');
-  } else {
-    el.style.removeProperty(prop);
-  }
-}
