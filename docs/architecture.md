@@ -133,6 +133,33 @@ Thin orchestration layer that stitches the above together:
 Also exports `extractNodes` and `extractEdges` for consumers that want
 metadata without re-parsing the DOM (e.g. the diagram store).
 
+### `services/markerScaling.ts` — Arrow marker scaling
+
+Scales SVG arrow markers proportionally to edge stroke width changes. When a
+user adjusts an edge's stroke width via the properties panel (1.0–5.0px+), the
+arrow markers scale to remain visually balanced.
+
+**Key design:**
+- **TIP_ATTACHMENT_RATIO constant (0.85)**: The line attaches at 85% of the
+  arrow tip position, ensuring the line goes through the arrow body rather than
+  just touching the point — this looks professional at all scales.
+- **Marker cloning strategy**: Prevents exponential scaling by stripping
+  `__scaled-XXX` suffixes before cloning, so cloned markers always derive from
+  the original.
+- **ViewBox removal**: Scaled markers work in pure user-space (no viewBox),
+  eliminating scaling conflicts between viewBox and markerWidth.
+- **Cached reuse**: Cloned markers are cached in the SVG and reused across
+  renders; marker IDs follow the pattern `<originalId>__scaled-<scalePercent>`.
+
+| Function | Responsibility |
+| -------- | -------------- |
+| `scaleMarker()` | Create a scaled marker clone (or return original if scale ≈ 1.0). Fixes the original marker's `refX` on first encounter to point at the arrow tip. |
+| `applyMarkerScaling()` | Apply marker scaling to an edge's `marker-end` attribute based on its stroke width. |
+| `applyMarkerStartScaling()` | Same as above but for `marker-start` (arrow at edge source). |
+
+Called from `DiagramCanvas` render effect whenever edge styles change, ensuring
+arrows stay visually consistent across all stroke sizes.
+
 ### `services/edgeRouter.ts`
 
 Backwards-compatible barrel that re-exports the historically public router

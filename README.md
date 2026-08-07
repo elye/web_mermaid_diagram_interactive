@@ -14,8 +14,10 @@ into place, style them, and export.
 - **Interactive canvas** — pan (drag background), zoom (mouse wheel / ⌘+wheel),
   drag any node, edges re-route on the fly.
 - **Multi-select & delete** — Shift-click to add to selection, Delete removes.
-- **Per-node styling** — properties panel with fill / stroke / stroke width,
-  plus one-click presets (Success / Warning / Error / Muted).
+- **Per-node and per-edge styling** — properties panel with fill / stroke / 
+  stroke width, plus one-click presets (Success / Warning / Error / Muted).
+  Arrow markers scale proportionally with edge stroke width (1.0–5.0px+).
+  
 - **Proprietary `.mermaidflow` format** — round-trip everything: source, node
   position overrides, style overrides, annotations, viewport, theme.
 - **Import / export** — drag-and-drop `.mmd` or `.mermaidflow`; export as SVG
