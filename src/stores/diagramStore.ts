@@ -55,7 +55,7 @@ export const useDiagramStore = create<DiagramState>((set) => ({
   edgeAnchorOverrides: {},
   renderError: null,
 
-  setSource: (src) => set({ source: src }),
+  setSource: (src) => set({ source: src, renderError: null }),
   setRendered: ({ svg, nodes, edges }) => set({ svg, nodes, edges, renderError: null }),
   setRenderError: (err) => set({ renderError: err }),
   setPositionOverride: (id, p) =>
