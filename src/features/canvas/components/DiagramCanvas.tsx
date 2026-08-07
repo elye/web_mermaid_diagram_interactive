@@ -18,6 +18,7 @@ import { resizeClusters } from '../services/clusterResize';
 import { extractClusterUserId } from '../services/cluster/clusterElements';
 import { contrastColor, setImportantStyle } from '../services/svg/styleUtils';
 import { cssEscape } from '../services/svg';
+import { applyMarkerScaling, applyMarkerStartScaling } from '../services/markerScaling';
 import type { EdgeLineStyle } from '@/shared/types/diagram';
 
 export function DiagramCanvas() {
@@ -209,12 +210,17 @@ export function DiagramCanvas() {
       const isSelected = selectedEdgeIds.has(id);
 
       setImportantStyle(p, 'stroke', style.stroke ?? '');
-      setImportantStyle(
-        p,
-        'stroke-width',
-        style.strokeWidth != null ? `${style.strokeWidth}px` : isSelected ? '3px' : '',
-      );
+      const strokeWidth =
+        style.strokeWidth != null ? style.strokeWidth : isSelected ? 3 : 2;
+      setImportantStyle(p, 'stroke-width', `${strokeWidth}px`);
       setImportantStyle(p, 'stroke-dasharray', style.dashArray ?? '');
+
+      // Scale arrow markers to match stroke width.
+      const svgEl = host.querySelector('svg') as SVGSVGElement | null;
+      if (svgEl) {
+        applyMarkerScaling(p, strokeWidth, svgEl);
+        applyMarkerStartScaling(p, strokeWidth, svgEl);
+      }
     });
 
     // ── Clusters ──
