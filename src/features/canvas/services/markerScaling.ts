@@ -18,6 +18,13 @@
 const BASE_STROKE_WIDTH = 2;
 
 /**
+ * Attachment ratio: the line attaches at this percentage of the arrow tip position.
+ * 85% means the line attaches slightly before the tip, ensuring it goes through
+ * the arrow body rather than just touching the point, which looks better at all scales.
+ */
+const TIP_ATTACHMENT_RATIO = 0.85;
+
+/**
  * Extract the original marker ID by removing any __scaled-XXX suffix.
  * E.g., "mf-render-2_flowchart-pointEnd__scaled-150" -> "mf-render-2_flowchart-pointEnd"
  */
@@ -37,11 +44,6 @@ export function scaleMarker(
   scaleFactor: number,
   svg: SVGSVGElement,
 ): string {
-  // If scale is 1 or very close, use the original marker.
-  if (Math.abs(scaleFactor - 1) < 0.01) {
-    return marker.id;
-  }
-
   // Get the original marker ID (strip any __scaled- suffix to avoid chaining).
   const originalId = getOriginalMarkerId(marker.id);
   const originalMarker =
@@ -49,6 +51,32 @@ export function scaleMarker(
 
   if (!originalMarker) {
     // Shouldn't happen, but fallback to the current marker's original dimensions.
+    return marker.id;
+  }
+
+  // If scale is 1 or very close, we still need to fix the original marker's refX
+  // because Mermaid's original marker has refX=6 which is designed for viewBox scaling,
+  // but we work in pure user space. We attach at TIP_ATTACHMENT_RATIO of the tip for better appearance.
+  if (Math.abs(scaleFactor - 1) < 0.01) {
+    // Fix the original marker's refX if not already fixed
+    if (!originalMarker.hasAttribute('data-refx-fixed')) {
+      const pathElement = originalMarker.querySelector('path[d]');
+      if (pathElement) {
+        const pathD = pathElement.getAttribute('d') || '';
+        const xCoords = [];
+        const regex = /(?:^|\s|,)(\d+\.?\d*)/g;
+        let match;
+        while ((match = regex.exec(pathD)) !== null) {
+          xCoords.push(parseFloat(match[1]));
+        }
+        const tipX = Math.max(...xCoords);
+        if (isFinite(tipX)) {
+          // Attach at TIP_ATTACHMENT_RATIO of the tip position for better visual appearance
+          originalMarker.setAttribute('refX', String(tipX * TIP_ATTACHMENT_RATIO));
+        }
+      }
+      originalMarker.setAttribute('data-refx-fixed', 'true');
+    }
     return marker.id;
   }
 
@@ -72,13 +100,42 @@ export function scaleMarker(
     scaledMarker.setAttribute('markerWidth', String(scaledWidth));
     scaledMarker.setAttribute('markerHeight', String(scaledHeight));
     
-    // For userSpaceOnUse markers with a viewBox, removing the viewBox prevents
-    // conflicting scaling behavior. With userSpaceOnUse, coordinates are in user space
-    // directly, and having a viewBox can cause SVG to apply additional scaling.
+    // For userSpaceOnUse markers, removing the viewBox prevents conflicting scaling.
     scaledMarker.removeAttribute('viewBox');
     
-    // Scale refX and refY proportionally to account for the marker size increase
-    scaledMarker.setAttribute('refX', String(origRefX * scaleFactor));
+    // For refX: Find the arrow tip and maintain consistent visual positioning across all scales.
+    // Original Mermaid marker: viewBox="0 0 10 10", markerWidth=12, path tip at x=10, refX=6
+    // When we remove the viewBox (working in pure user space), we need refX to attach near the tip.
+    //
+    // For visual consistency: attach slightly before the tip (at TIP_ATTACHMENT_RATIO of tip position).
+    // This ensures the line goes through the arrow body rather than just touching the point,
+    // which looks better especially at larger scales (4px+).
+    
+    let refXTarget = origRefX * scaleFactor; // Default fallback
+    
+    const pathElement = originalMarker.querySelector('path[d]');
+    if (pathElement) {
+      const pathD = pathElement.getAttribute('d') || '';
+      // Find all x-coordinates in the path
+      const xCoords = [];
+      const regex = /(?:^|\s|,)(\d+\.?\d*)/g;
+      let match;
+      while ((match = regex.exec(pathD)) !== null) {
+        xCoords.push(parseFloat(match[1]));
+      }
+      
+      // The arrow tip is at the maximum x-coordinate in the path
+      const origTipX = Math.max(...xCoords);
+      if (isFinite(origTipX)) {
+        // After scaling, the tip will be at (origTipX * scaleFactor).
+        // Attach at TIP_ATTACHMENT_RATIO of the tip position for better visual appearance.
+        refXTarget = origTipX * scaleFactor * TIP_ATTACHMENT_RATIO;
+      }
+    }
+    
+    scaledMarker.setAttribute('refX', String(refXTarget));
+    
+    // Scale refY proportionally to maintain vertical centering
     scaledMarker.setAttribute('refY', String(origRefY * scaleFactor));
 
     // Since we removed the viewBox, we now need to scale the path coordinates
