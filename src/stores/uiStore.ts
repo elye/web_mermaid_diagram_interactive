@@ -7,6 +7,15 @@ import { nextId } from '@/shared/utils/idGenerator';
 
 export type Theme = 'light' | 'dark' | 'system';
 
+/**
+ * Controls which neighbours are highlighted when a node/edge/cluster is selected.
+ *   both        — sources (upstream) AND sinks (downstream) are highlighted (default)
+ *   only-sources — only upstream source nodes are highlighted
+ *   only-sinks   — only downstream sink nodes are highlighted
+ *   none         — no connectivity highlighting
+ */
+export type ConnectivityMode = 'both' | 'only-sources' | 'only-sinks' | 'none';
+
 export interface Toast {
   id: string;
   kind: 'info' | 'error' | 'success';
@@ -18,11 +27,13 @@ export interface UiState {
   theme: Theme;
   viewport: ViewportState;
   showMinimap: boolean;
+  connectivityMode: ConnectivityMode;
   toasts: Toast[];
 
   setTheme: (t: Theme) => void;
   setViewport: (v: Partial<ViewportState>) => void;
   toggleMinimap: () => void;
+  setConnectivityMode: (mode: ConnectivityMode) => void;
   pushToast: (t: Omit<Toast, 'id'>) => void;
   dismissToast: (id: string) => void;
   hydrate: (patch: Partial<UiState>) => void;
@@ -32,11 +43,13 @@ export const useUiStore = create<UiState>((set) => ({
   theme: 'system',
   viewport: { zoom: 1, panX: 0, panY: 0 },
   showMinimap: true,
+  connectivityMode: 'both',
   toasts: [],
 
   setTheme: (t) => set({ theme: t }),
   setViewport: (v) => set((s) => ({ viewport: { ...s.viewport, ...v } })),
   toggleMinimap: () => set((s) => ({ showMinimap: !s.showMinimap })),
+  setConnectivityMode: (mode) => set({ connectivityMode: mode }),
   pushToast: (t) => set((s) => ({ toasts: [...s.toasts, { id: nextId('toast'), ...t }] })),
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   hydrate: (patch) => set(patch),

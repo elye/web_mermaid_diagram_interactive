@@ -46,6 +46,7 @@ export function DiagramCanvas() {
   const selectedEdgeIds = useSelectionStore((s) => s.selectedEdgeIds);
   const selectedClusterId = useSelectionStore((s) => s.selectedClusterId);
   const viewport = useUiStore((s) => s.viewport);
+  const connectivityMode = useUiStore((s) => s.connectivityMode);
 
   // Build Maps for the router (stable across re-renders when contents haven't changed).
   const lineStyleMap = useMemo(() => {
@@ -357,7 +358,7 @@ export function DiagramCanvas() {
       canvas.classList.toggle('mf-canvas--has-selection', hasSelection);
     }
 
-    if (hasSelection) {
+    if (hasSelection && connectivityMode !== 'none') {
       if (selectedEdgeIds.size > 0 && selectedNodeIds.size === 0 && !selectedClusterId) {
         // Edge-only selection: highlight just the two endpoint nodes of the
         // selected edge(s) as source/sink. Do NOT run the full neighbour
@@ -366,18 +367,24 @@ export function DiagramCanvas() {
         for (const edgeId of selectedEdgeIds) {
           const edgeMeta = edges.find((e) => e.id === edgeId);
           if (!edgeMeta) continue;
-          if (edgeMeta.sourceId) {
+          // In edge-selection context, source endpoint = "source", target = "sink".
+          // Respect the connectivity mode: only-sources hides the sink end, only-sinks hides the source end.
+          let anyEndpointHighlighted = false;
+          if (edgeMeta.sourceId && connectivityMode !== 'only-sinks') {
             const g = host.querySelector(`g[data-node-id="${cssEscape(edgeMeta.sourceId)}"]`);
-            g?.classList.add('mf-node--source');
+            if (g) { g.classList.add('mf-node--source'); anyEndpointHighlighted = true; }
           }
-          if (edgeMeta.targetId) {
+          if (edgeMeta.targetId && connectivityMode !== 'only-sources') {
             const g = host.querySelector(`g[data-node-id="${cssEscape(edgeMeta.targetId)}"]`);
-            g?.classList.add('mf-node--sink');
+            if (g) { g.classList.add('mf-node--sink'); anyEndpointHighlighted = true; }
           }
-          // The selected edge itself is already marked .mf-edge--selected;
-          // also add connected so the opacity rule keeps it fully visible.
-          const p = host.querySelector(`path[data-edge-id="${cssEscape(edgeId)}"]`);
-          p?.classList.add('mf-edge--connected');
+          // Only keep the edge un-dimmed when at least one endpoint node is
+          // actually highlighted — if neither endpoint exists in the rendered
+          // SVG the edge itself should stay dimmed like all other unrelated edges.
+          if (anyEndpointHighlighted) {
+            const p = host.querySelector(`path[data-edge-id="${cssEscape(edgeId)}"]`);
+            p?.classList.add('mf-edge--connected');
+          }
         }
       } else {
         // Node / cluster selection: run full neighbour traversal.
@@ -386,21 +393,46 @@ export function DiagramCanvas() {
           edges,
         );
 
-        sourceNodeIds.forEach((id) => {
+        // connectedEdgeIds covers edges to both sources and sinks; when the
+        // mode restricts to one side we must also filter which edges to show.
+        const shownSourceIds = connectivityMode !== 'only-sinks'  ? sourceNodeIds : new Set<string>();
+        const shownSinkIds   = connectivityMode !== 'only-sources' ? sinkNodeIds   : new Set<string>();
+
+        shownSourceIds.forEach((id) => {
           const g = host.querySelector(`g[data-node-id="${cssEscape(id)}"]`);
           g?.classList.add('mf-node--source');
         });
-        sinkNodeIds.forEach((id) => {
+        shownSinkIds.forEach((id) => {
           const g = host.querySelector(`g[data-node-id="${cssEscape(id)}"]`);
           g?.classList.add('mf-node--sink');
         });
+
+        // Only keep connected-edge highlights for the visible side(s).
+        // An edge belongs to the "sources" side when its source node is a
+        // highlighted source (i.e. upstream of the selection) — meaning the
+        // edge runs from a source neighbour INTO the selection.
+        // An edge belongs to the "sinks" side when its target node is a
+        // highlighted sink (i.e. downstream of the selection).
+        // We do NOT use effectiveSelection membership here: an edge whose
+        // selected-end is in effectiveSelection but whose neighbour-end is
+        // not shown should stay dimmed (e.g. B→C stays dimmed when only
+        // sources are shown, even though B is selected).
         connectedEdgeIds.forEach((id) => {
           const p = host.querySelector(`path[data-edge-id="${cssEscape(id)}"]`);
-          p?.classList.add('mf-edge--connected');
+          if (!p) return;
+          const edgeSrc = p.getAttribute('data-edge-source');
+          const edgeTgt = p.getAttribute('data-edge-target');
+          // source-side edge: flows from a source neighbour into the selection
+          const isSourceEdge = edgeSrc ? shownSourceIds.has(edgeSrc) : false;
+          // sink-side edge: flows from the selection out to a sink neighbour
+          const isSinkEdge = edgeTgt ? shownSinkIds.has(edgeTgt) : false;
+          if (isSourceEdge || isSinkEdge) {
+            p.classList.add('mf-edge--connected');
+          }
         });
       }
     }
-  }, [selectedNodeIds, selectedEdgeIds, selectedClusterId, svg, edges, source]);
+  }, [selectedNodeIds, selectedEdgeIds, selectedClusterId, svg, edges, source, connectivityMode]);
 
   return (
     <div
