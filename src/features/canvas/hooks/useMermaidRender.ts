@@ -14,6 +14,8 @@ export function useMermaidRender() {
 
   useEffect(() => {
     let cancelled = false;
+    // Clear any previous error as soon as a new render attempt begins.
+    useDiagramStore.getState().setRenderError(null);
     (async () => {
       try {
         const result = await renderMermaid(debounced);
@@ -21,7 +23,9 @@ export function useMermaidRender() {
         useDiagramStore.getState().setRendered(result);
       } catch (err) {
         if (cancelled) return;
-        const message = err instanceof Error ? err.message : String(err);
+        const raw = err instanceof Error ? err.message : String(err);
+        // Strip the trailing "mermaid version X.Y.Z" line that mermaid appends.
+        const message = raw.replace(/\nmermaid version[\s\S]*$/i, '').trim();
         useDiagramStore.getState().setRenderError(message);
       }
     })();
