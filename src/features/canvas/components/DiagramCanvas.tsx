@@ -3,11 +3,17 @@
  * wires pan/zoom, node-drag, cluster-drag and edge-drag interactions, and
  * applies style overrides & position overrides on each render.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDiagramStore } from '@/stores/diagramStore';
 import { useStyleStore } from '@/stores/styleStore';
 import { useSelectionStore } from '@/stores/selectionStore';
 import { useUiStore } from '@/stores/uiStore';
+import {
+  DiagramTooltip,
+  computeNodeConnections,
+  computeEdgeTooltipInfo,
+  type TooltipInfo,
+} from './DiagramTooltip';
 import { useMermaidRender } from '../hooks/useMermaidRender';
 import { useCanvasInteraction } from '../hooks/useCanvasInteraction';
 import { useNodeDrag } from '../hooks/useNodeDrag';
@@ -47,6 +53,11 @@ export function DiagramCanvas() {
   const selectedClusterId = useSelectionStore((s) => s.selectedClusterId);
   const viewport = useUiStore((s) => s.viewport);
   const connectivityMode = useUiStore((s) => s.connectivityMode);
+  const showTooltip = useUiStore((s) => s.showTooltip);
+
+  // ── Tooltip state ──────────────────────────────────────────────────────────
+  const [tooltipInfo, setTooltipInfo] = useState<TooltipInfo | null>(null);
+  const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Build Maps for the router (stable across re-renders when contents haven't changed).
   const lineStyleMap = useMemo(() => {
@@ -473,6 +484,107 @@ export function DiagramCanvas() {
     }
   }, [selectedNodeIds, selectedEdgeIds, selectedClusterId, svg, edges, source, connectivityMode]);
 
+  // ── Tooltip hover wiring ───────────────────────────────────────────────────
+  // We mount pointer-enter / pointer-move / pointer-leave listeners on the
+  // SVG host div. A 600 ms delay avoids flashing the tooltip on quick passes.
+  useEffect(() => {
+    const host = svgHostRef.current;
+    if (!host || !showTooltip) return;
+
+    const clearTimer = () => {
+      if (tooltipTimerRef.current !== null) {
+        clearTimeout(tooltipTimerRef.current);
+        tooltipTimerRef.current = null;
+      }
+    };
+
+    const handlePointerMove = (e: PointerEvent) => {
+      clearTimer();
+      const target = e.target as Element | null;
+      if (!target) { setTooltipInfo(null); return; }
+
+      // Check for node
+      const nodeG = target.closest<SVGGElement>('g[data-node-id]');
+      const edgePath = !nodeG
+        ? (target.closest<SVGPathElement>('path[data-edge-id]') ??
+           target.closest<SVGPathElement>('.mf-edge-hit'))
+        : null;
+
+      if (!nodeG && !edgePath) {
+        setTooltipInfo(null);
+        return;
+      }
+
+      const cx = e.clientX;
+      const cy = e.clientY;
+
+      tooltipTimerRef.current = setTimeout(() => {
+        const { edges: currentEdges, nodes: currentNodes } = useDiagramStore.getState();
+
+        if (nodeG) {
+          const nodeId = nodeG.getAttribute('data-node-id');
+          if (!nodeId) return;
+          const nodeMeta = currentNodes.find((n) => n.id === nodeId);
+          const connections = computeNodeConnections(nodeId, currentEdges, currentNodes);
+          setTooltipInfo({
+            kind: 'node',
+            nodeId,
+            label: nodeMeta?.label ?? nodeId,
+            ...connections,
+            x: cx,
+            y: cy,
+          });
+        } else if (edgePath) {
+          // Resolve the real edge id (hit paths use data-hit-edge-id)
+          const edgeId =
+            edgePath.getAttribute('data-edge-id') ??
+            edgePath.getAttribute('data-hit-edge-id');
+          if (!edgeId) return;
+          const { label, sourceName, targetName, bidirectional } = computeEdgeTooltipInfo(
+            edgeId,
+            currentEdges,
+            currentNodes,
+            host,
+          );
+          setTooltipInfo({
+            kind: 'edge',
+            edgeId,
+            label,
+            sourceName,
+            targetName,
+            bidirectional,
+            x: cx,
+            y: cy,
+          });
+        }
+      }, 600);
+    };
+
+    const handlePointerLeave = () => {
+      clearTimer();
+      setTooltipInfo(null);
+    };
+
+    host.addEventListener('pointermove', handlePointerMove);
+    host.addEventListener('pointerleave', handlePointerLeave);
+    return () => {
+      clearTimer();
+      host.removeEventListener('pointermove', handlePointerMove);
+      host.removeEventListener('pointerleave', handlePointerLeave);
+    };
+  }, [svg, showTooltip]);
+
+  // Hide tooltip whenever showTooltip is toggled off.
+  useEffect(() => {
+    if (!showTooltip) {
+      if (tooltipTimerRef.current !== null) {
+        clearTimeout(tooltipTimerRef.current);
+        tooltipTimerRef.current = null;
+      }
+      setTooltipInfo(null);
+    }
+  }, [showTooltip]);
+
   return (
     <div
       ref={containerRef}
@@ -496,6 +608,7 @@ export function DiagramCanvas() {
           transition: 'transform 60ms linear',
         }}
       />
+      {tooltipInfo && <DiagramTooltip info={tooltipInfo} />}
     </div>
   );
 }

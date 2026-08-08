@@ -18,6 +18,8 @@ export function CanvasControls() {
   const zoom = useUiStore((s) => s.viewport.zoom);
   const connectivityMode = useUiStore((s) => s.connectivityMode);
   const setConnectivityMode = useUiStore((s) => s.setConnectivityMode);
+  const showTooltip = useUiStore((s) => s.showTooltip);
+  const toggleTooltip = useUiStore((s) => s.toggleTooltip);
 
   const zoomBy = (factor: number) => {
     setViewport({ zoom: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom * factor)) });
@@ -50,6 +52,23 @@ export function CanvasControls() {
             {label}
           </button>
         ))}
+      </div>
+
+      {/* Tooltip toggle */}
+      <div className="flex flex-col rounded-md border border-border bg-surface shadow-md overflow-hidden">
+        <button
+          onClick={toggleTooltip}
+          title={showTooltip ? 'Hide hover tooltips' : 'Show hover tooltips'}
+          aria-pressed={showTooltip}
+          className={[
+            'px-2 py-1 text-sm transition-colors',
+            showTooltip
+              ? 'bg-accent text-white'
+              : 'text-ink hover:bg-surface-alt',
+          ].join(' ')}
+        >
+          💬
+        </button>
       </div>
 
       {/* Zoom controls */}

@@ -29,12 +29,15 @@ export interface UiState {
   viewport: ViewportState;
   showMinimap: boolean;
   connectivityMode: ConnectivityMode;
+  /** Whether to show hover tooltips on nodes and edges. On by default. */
+  showTooltip: boolean;
   toasts: Toast[];
 
   setTheme: (t: Theme) => void;
   setViewport: (v: Partial<ViewportState>) => void;
   toggleMinimap: () => void;
   setConnectivityMode: (mode: ConnectivityMode) => void;
+  toggleTooltip: () => void;
   pushToast: (t: Omit<Toast, 'id'>) => void;
   dismissToast: (id: string) => void;
   hydrate: (patch: Partial<UiState>) => void;
@@ -45,12 +48,14 @@ export const useUiStore = create<UiState>((set) => ({
   viewport: { zoom: 1, panX: 0, panY: 0 },
   showMinimap: true,
   connectivityMode: 'both',
+  showTooltip: true,
   toasts: [],
 
   setTheme: (t) => set({ theme: t }),
   setViewport: (v) => set((s) => ({ viewport: { ...s.viewport, ...v } })),
   toggleMinimap: () => set((s) => ({ showMinimap: !s.showMinimap })),
   setConnectivityMode: (mode) => set({ connectivityMode: mode }),
+  toggleTooltip: () => set((s) => ({ showTooltip: !s.showTooltip })),
   pushToast: (t) => set((s) => ({ toasts: [...s.toasts, { id: nextId('toast'), ...t }] })),
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   hydrate: (patch) => set(patch),
