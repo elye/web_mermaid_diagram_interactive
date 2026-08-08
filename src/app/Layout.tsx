@@ -19,7 +19,7 @@ export function Layout() {
       <FileDropZone>
         <SplitPane
           left={
-            <div className="h-full w-full bg-surface-alt">
+            <div className="flex h-full w-full flex-col overflow-hidden bg-surface-alt">
               <CodeEditor />
             </div>
           }

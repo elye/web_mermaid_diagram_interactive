@@ -47,7 +47,7 @@ export function CodeEditor() {
     (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
 
   return (
-    <div className="relative flex h-full flex-col">
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
       <CodeMirror
         ref={ref}
         value={source}
@@ -63,7 +63,7 @@ export function CodeEditor() {
           foldGutter: true,
         }}
         height="100%"
-        className="flex-1"
+        className="min-h-0 flex-1 overflow-auto"
       />
       <SyntaxErrorPanel />
     </div>
