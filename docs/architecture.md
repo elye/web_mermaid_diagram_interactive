@@ -234,46 +234,6 @@ directly.
 Same back-compat pattern as `edgeRouter.ts`, but for the `cluster/`
 sub-pipeline: re-exports `resizeClusters` and `parseSubgraphMembership`.
 
-### `services/collapseUtils.ts` — collapse view-graph transformer
-
-Pure module that transforms the **semantic graph** (nodes, edges, cluster
-membership — extracted once from Mermaid source) into a **view graph delta**
-describing everything the renderer must change to show the current set of
-collapsed clusters. This is the single file that owns the collapse
-transformation; the DOM effect in `useClusterCollapse.ts` is a thin
-projector on top of it.
-
-The canvas pipeline is deliberately split into three layers so interactive
-transforms like collapse can be reasoned about, unit-tested, and later
-composed:
-
-1. **Semantic graph** — `NodeMeta[]`, `EdgeMeta[]`, and
-   `parseSubgraphMembership` map. Derived from the Mermaid source only;
-   invariant across any view state.
-2. **View graph** — the effective graph currently drawn, derived by
-   `computeCollapseState(collapsedClusters, membership, edges)` (and any
-   future filters/focus modes). Must be a pure function of the semantic
-   graph plus view state — no DOM reads, no store writes.
-3. **Rendering** — DOM effects (`useClusterCollapse`, tooltip hover
-   handlers) that project the view graph onto the live SVG.
-
-`computeCollapseState` returns three sets/lists:
-
-| Field           | Purpose |
-| --------------- | ------- |
-| `hiddenNodeIds` | Every leaf inside any collapsed cluster (outermost collapsed cluster wins on nested collapse). |
-| `hiddenEdgeIds` | Every edge whose original path must be hidden — internal-to-collapsed edges and edges replaced by bundles. |
-| `bundledEdges`  | One `BundledEdge` per unique `(clusterId, externalNodeId, direction)` triple. `externalNodeId` may itself be a collapsed cluster id (cluster-to-cluster case). Parallel real edges collapse into a single bundle with an incremented `count` so the renderer can draw a single arrow with an ×N badge. |
-
-`bundleLabel(count)` returns the badge text (`×N` for N ≥ 2, `null`
-otherwise).
-
-Consumers:
-- `useClusterCollapse.ts` — renders the bundles and hides originals.
-- `DiagramCanvas.tsx` — tooltip hover handler uses the same function to
-  synthesise `Sources` / `Sinks` / `Bidir` lists for the collapsed-cluster
-  tooltip, so tooltip data can never drift from what the user sees.
-
 ### Canvas interaction hooks
 
 Two SVG-touching hooks share the same "read from stores → mutate live DOM"
@@ -283,7 +243,6 @@ pattern; they never re-render React during a drag.
 | ------------------- | -------------- |
 | `useNodeDrag.ts`    | Pointer-event lifecycle for node dragging + incident-edge rerouting. Uses shared `readTranslate`/`writeTranslate`/`cssEscape` from `services/svg`. |
 | `useClusterDrag.ts` | Pointer-event lifecycle for subgraph cluster dragging. On `pointerdown` over a `g.cluster`: selects the cluster, resolves member node IDs via `parseSubgraphMembership` + `collectAllNodeIds`, and translates all member nodes together by the same delta. On release, persists final positions to `diagramStore.positionOverrides` and commits a history snapshot. |
-| `useClusterCollapse.ts` | Projects the view-graph delta from `services/collapseUtils.ts` onto the live SVG. Injects a `▼`/`▶` toggle button into every cluster (`foreignObject.mf-cluster-toggle`); for each collapsed cluster it hides member nodes, hides original edges bundled into a summary, resizes the cluster rect to a fixed component size (120×40), and draws a properly-routed bezier `.mf-bundle-edge--{in,out,bidir}` arrow for every `BundledEdge` (with an ×N label when >1 edge merged). All bundle geometry uses the same `anchorOn` + `bezierPath` helpers as `routeAllEdges`, so bundles honour node/cluster edges consistently. Cleans up all injected DOM on every run and restores the original cluster rect dimensions from `data-mf-original-w/h` attributes, so expand→collapse cycles round-trip losslessly. |
 | `useEdgeDrag.ts`    | Pointer-event lifecycle for waypoint and anchor drags. History commit fires on the first move-that-mutates so undo restores the pre-drag state. |
 | `edgeHandles.ts`    | Injects `.mf-edge-handle` circles (waypoint ● + anchor ◯) into the SVG for every selected edge, and re-injects them on every dep change so a full SVG re-render doesn't strand them. |
 | `edgeDragUtils.ts`  | Shared drag helpers: `svgPoint` (client → SVG coords via `CTM`), `buildLineStyleMap`. |
@@ -457,15 +416,6 @@ undo keystroke.
   circles) are injected as plain SVG elements alongside the edge paths rather
   than rendered via React, matching the pattern of `useNodeDrag`. A full SVG
   re-render wipes them; `useEdgeDrag` re-injects them on every dep change.
-- **View-state vs. document-state.** Some `diagramStore` slices describe the
-  document (`source`, `positionOverrides`, `edgeWaypoints`, …) and are
-  captured in the history and autosave snapshots; others describe transient
-  view state that must NOT be undoable or persisted (`collapsedClusters` —
-  which subgraphs the user has visually folded). View state lives on the
-  same store for locality, but is explicitly excluded from the
-  history/autosave snapshot fields and is cleared on `setSource` so a fresh
-  document always starts fully expanded. Selection follows the same rule
-  and is kept on a separate store (`selectionStore`).
 
 ## Why Zustand?
 

@@ -15,39 +15,23 @@ const CLUSTER_PADDING_Y_BOTTOM = 16;
  * Resize every subgraph cluster in `svg` so it wraps its current member nodes.
  * `source` is the live Mermaid diagram source used to determine membership.
  *
- * @param collapsedClusters  Optional set of cluster ids that are currently
- *   collapsed to a fixed 120×40 box. Collapsed clusters are skipped during
- *   resizing (their box is owned by `useClusterCollapse`), but their current
- *   bbox IS included when sizing parent clusters — so the parent correctly
- *   wraps the collapsed child box.
- *
  * Safe to call on every drag frame — it is fast (pure DOM attribute reads/writes,
  * no layout queries).
  */
-export function resizeClusters(
-  svg: SVGSVGElement,
-  source: string,
-  collapsedClusters?: ReadonlySet<string>,
-): void {
+export function resizeClusters(svg: SVGSVGElement, source: string): void {
   const clusterEls = collectClusterElements(svg);
   if (clusterEls.size === 0) return;
 
   const membership = parseSubgraphMembership(source);
   if (membership.size === 0) return;
 
-  // Collect current VISIBLE node bboxes once per frame.
-  // Hidden nodes (collapsed members) are already excluded by collectNodeBBoxes.
+  // Collect current node bboxes once per frame.
   const nodeBBoxes = collectNodeBBoxes(svg);
 
   // Process clusters bottom-up: deepest nesting level first so parent
-  // clusters include already-expanded (or already-collapsed) child bboxes.
+  // clusters include already-expanded child cluster bboxes.
   const order = topoOrder(membership);
   for (const subId of order) {
-    // Collapsed clusters own their own rect — skip resizing them.
-    // Their current bbox (the collapsed 120×40 box) will be picked up by
-    // their parent's unionBBox call via clusterEls.
-    if (collapsedClusters?.has(subId)) continue;
-
     const el = clusterEls.get(subId);
     if (!el) continue;
     const members = membership.get(subId);

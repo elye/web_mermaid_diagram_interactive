@@ -43,44 +43,7 @@ export interface EdgeTooltipInfo {
   y: number;
 }
 
-/**
- * Tooltip shown when hovering a **collapsed cluster**. Summarises how many
- * member nodes are hidden and what the cluster is connected to on the outside.
- */
-export interface CollapsedClusterTooltipInfo {
-  kind: 'collapsed-cluster';
-  clusterId: string;
-  memberCount: number;
-  sourceNames: string[];
-  sourceOverflow: boolean;
-  sinkNames: string[];
-  sinkOverflow: boolean;
-  bidirNames: string[];
-  bidirOverflow: boolean;
-  x: number;
-  y: number;
-}
-
-/**
- * Tooltip shown when hovering a **bundled summary arrow** drawn by the
- * collapse renderer. Explains how many real edges were merged and in which
- * direction they run.
- */
-export interface BundledEdgeTooltipInfo {
-  kind: 'bundled-edge';
-  clusterId: string;
-  externalNodeLabel: string;
-  direction: 'in' | 'out' | 'bidir';
-  count: number;
-  x: number;
-  y: number;
-}
-
-export type TooltipInfo =
-  | NodeTooltipInfo
-  | EdgeTooltipInfo
-  | CollapsedClusterTooltipInfo
-  | BundledEdgeTooltipInfo;
+export type TooltipInfo = NodeTooltipInfo | EdgeTooltipInfo;
 
 interface Props {
   info: TooltipInfo;
@@ -96,10 +59,11 @@ export function DiagramTooltip({ info }: Props) {
 
   return createPortal(
     <div className="mf-tooltip" style={style} role="tooltip">
-      {info.kind === 'node' && <NodeTooltipContent info={info} />}
-      {info.kind === 'edge' && <EdgeTooltipContent info={info} />}
-      {info.kind === 'collapsed-cluster' && <CollapsedClusterTooltipContent info={info} />}
-      {info.kind === 'bundled-edge' && <BundledEdgeTooltipContent info={info} />}
+      {info.kind === 'node' ? (
+        <NodeTooltipContent info={info} />
+      ) : (
+        <EdgeTooltipContent info={info} />
+      )}
     </div>,
     document.body,
   );
@@ -167,63 +131,6 @@ function EdgeTooltipContent({ info }: { info: EdgeTooltipInfo }) {
         <span className="mf-tooltip__endpoint mf-tooltip__endpoint--target">
           {info.targetName ?? '?'}
         </span>
-      </div>
-    </>
-  );
-}
-
-function CollapsedClusterTooltipContent({ info }: { info: CollapsedClusterTooltipInfo }) {
-  const hasSource = info.sourceNames.length > 0 || info.sourceOverflow;
-  const hasSink   = info.sinkNames.length   > 0 || info.sinkOverflow;
-  const hasBidir  = info.bidirNames.length  > 0 || info.bidirOverflow;
-  const colCount  = (hasSource ? 1 : 0) + (hasSink ? 1 : 0) + (hasBidir ? 1 : 0);
-  return (
-    <>
-      <div className="mf-tooltip__title">
-        {info.clusterId}
-        <span className="mf-tooltip__cluster-count">
-          ({info.memberCount} node{info.memberCount === 1 ? '' : 's'} collapsed)
-        </span>
-      </div>
-      {colCount > 0 && (
-        <div className="mf-tooltip__columns" data-cols={colCount}>
-          {hasSource && (
-            <ConnGroup color="amber" label="Sources" names={info.sourceNames} overflow={info.sourceOverflow} />
-          )}
-          {hasSink && (
-            <ConnGroup color="violet" label="Sinks" names={info.sinkNames} overflow={info.sinkOverflow} />
-          )}
-          {hasBidir && (
-            <ConnGroup color="teal" label="Bidir ⇔" names={info.bidirNames} overflow={info.bidirOverflow} />
-          )}
-        </div>
-      )}
-    </>
-  );
-}
-
-function BundledEdgeTooltipContent({ info }: { info: BundledEdgeTooltipInfo }) {
-  // Arrow rendering matches the direction of the summary arrow drawn on canvas:
-  //   in    :  external → cluster
-  //   out   :  cluster → external
-  //   bidir :  cluster ↔ external
-  const arrow = info.direction === 'bidir' ? '↔' : '→';
-  const [left, right] =
-    info.direction === 'in'
-      ? [info.externalNodeLabel, info.clusterId]
-      : [info.clusterId, info.externalNodeLabel];
-  return (
-    <>
-      <div className="mf-tooltip__title">
-        Bundled edge
-        <span className="mf-tooltip__cluster-count">
-          ({info.count} edge{info.count === 1 ? '' : 's'} merged)
-        </span>
-      </div>
-      <div className="mf-tooltip__edge-endpoints">
-        <span className="mf-tooltip__endpoint mf-tooltip__endpoint--source">{left}</span>
-        <span className="mf-tooltip__arrow">{arrow}</span>
-        <span className="mf-tooltip__endpoint mf-tooltip__endpoint--target">{right}</span>
       </div>
     </>
   );

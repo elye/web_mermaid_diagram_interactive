@@ -26,7 +26,6 @@ import { resizeClusters } from '../services/clusterResize';
 import { parseSubgraphMembership, collectAllNodeIds } from '../services/cluster';
 import { extractClusterUserId } from '../services/cluster/clusterElements';
 import { cssEscape } from '../services/svg';
-import { rebuildBundleOverlays } from './useClusterCollapse';
 
 interface ClusterDragCtx {
   clusterId: string;
@@ -38,12 +37,6 @@ interface ClusterDragCtx {
   startX: number;
   startY: number;
   moved: boolean;
-  /**
-   * When the cluster is collapsed we also translate the cluster <g> itself
-   * (the member nodes are hidden). Record the cluster's original translate.
-   */
-  isCollapsed: boolean;
-  clusterOriginalPos: { x: number; y: number };
 }
 
 /** Parse the translate(x,y) of a node <g> element. */
@@ -82,19 +75,15 @@ export function useClusterDrag(
       const svg = ctx.clusterGroup.ownerSVGElement;
       if (!svg) return;
 
-      if (!ctx.isCollapsed) {
-        // Translate every member node by the same delta from its drag-start position.
-        // For collapsed clusters we skip this — member nodes are hidden (display:none)
-        // and we translate the cluster <g> directly instead.
-        ctx.nodeIds.forEach((nodeId) => {
-          const g = svg.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nodeId)}"]`);
-          if (!g) return;
-          const orig = ctx!.nodeOriginalPositions.get(nodeId);
-          if (orig) {
-            g.setAttribute('transform', `translate(${orig.x + dx}, ${orig.y + dy})`);
-          }
-        });
-      }
+      // Translate every member node by the same delta from its drag-start position.
+      ctx.nodeIds.forEach((nodeId) => {
+        const g = svg.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nodeId)}"]`);
+        if (!g) return;
+        const orig = ctx!.nodeOriginalPositions.get(nodeId);
+        if (orig) {
+          g.setAttribute('transform', `translate(${orig.x + dx}, ${orig.y + dy})`);
+        }
+      });
 
       // Keep edges routed and cluster boxes resized every frame.
       const { edgeWaypoints, edgeAnchorOverrides, source } = useDiagramStore.getState();
@@ -104,33 +93,12 @@ export function useClusterDrag(
           .filter(([, s]) => s.lineStyle)
           .map(([id, s]) => [id, s.lineStyle!] as const),
       );
-
-      const { collapsedClusters } = useDiagramStore.getState();
-
-      if (ctx.isCollapsed) {
-        // For a collapsed cluster: translate the cluster <g> directly.
-        // Pass collapsedClusters to resizeClusters so it skips the collapsed
-        // cluster's own rect (which we're dragging) but DOES refit any parent
-        // cluster box around the moved collapsed child.
-        const { x: ox, y: oy } = ctx.clusterOriginalPos;
-        ctx.clusterGroup.setAttribute('transform', `translate(${ox + dx}, ${oy + dy})`);
-        // Reroute normal (non-bundle) edges and rebuild bundle overlays.
-        routeAllEdges(svg, {
-          lineStyles,
-          waypoints: new Map(Object.entries(edgeWaypoints)),
-          anchorOverrides: new Map(Object.entries(edgeAnchorOverrides)),
-        });
-        rebuildBundleOverlays(svg);
-        // Refit parent cluster boxes around the moved collapsed child.
-        resizeClusters(svg, source, collapsedClusters);
-      } else {
-        routeAllEdges(svg, {
-          lineStyles,
-          waypoints: new Map(Object.entries(edgeWaypoints)),
-          anchorOverrides: new Map(Object.entries(edgeAnchorOverrides)),
-        });
-        resizeClusters(svg, source, collapsedClusters);
-      }
+      routeAllEdges(svg, {
+        lineStyles,
+        waypoints: new Map(Object.entries(edgeWaypoints)),
+        anchorOverrides: new Map(Object.entries(edgeAnchorOverrides)),
+      });
+      resizeClusters(svg, source);
       expandViewBoxToFit(svg);
     };
 
@@ -139,41 +107,16 @@ export function useClusterDrag(
       if (!ctx) return;
 
       if (ctx.moved) {
+        // Persist final positions so they survive the next Mermaid re-render.
         const svg = ctx.clusterGroup.ownerSVGElement;
         if (svg) {
           useHistoryStore.getState().commit();
-
-          if (ctx.isCollapsed) {
-            // Persist the shifted positions for all member nodes.
-            // These nodes are hidden (display:none) but still have their transforms.
-            // When the cluster is later expanded, DiagramCanvas re-applies
-            // positionOverrides which positions nodes correctly, and resizeClusters
-            // will refit the cluster box around them.
-            //
-            // Compute the drag delta from the cluster <g>'s final transform.
-            const finalTransform = ctx.clusterGroup.getAttribute('transform') ?? '';
-            const fm = /translate\(\s*([+-]?\d*\.?\d+)[\s,]+([+-]?\d*\.?\d+)\s*\)/.exec(finalTransform);
-            const finalX = fm ? Number(fm[1]) : ctx.clusterOriginalPos.x;
-            const finalY = fm ? Number(fm[2]) : ctx.clusterOriginalPos.y;
-            const ddx = finalX - ctx.clusterOriginalPos.x;
-            const ddy = finalY - ctx.clusterOriginalPos.y;
-
-            ctx.nodeIds.forEach((nodeId) => {
-              const origPos = ctx!.nodeOriginalPositions.get(nodeId);
-              if (!origPos) return;
-              useDiagramStore.getState().setPositionOverride(nodeId, {
-                x: origPos.x + ddx,
-                y: origPos.y + ddy,
-              });
-            });
-          } else {
-            ctx.nodeIds.forEach((nodeId) => {
-              const g = svg.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nodeId)}"]`);
-              if (!g) return;
-              const pos = readNodeTranslate(g);
-              useDiagramStore.getState().setPositionOverride(nodeId, pos);
-            });
-          }
+          ctx.nodeIds.forEach((nodeId) => {
+            const g = svg.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nodeId)}"]`);
+            if (!g) return;
+            const pos = readNodeTranslate(g);
+            useDiagramStore.getState().setPositionOverride(nodeId, pos);
+          });
         }
       }
 
@@ -196,7 +139,7 @@ export function useClusterDrag(
       useSelectionStore.getState().selectCluster(clusterId);
 
       // Discover member node IDs from the live Mermaid source.
-      const { source, collapsedClusters } = useDiagramStore.getState();
+      const source = useDiagramStore.getState().source;
       const membership = parseSubgraphMembership(source);
       const allNodeIds = collectAllNodeIds(clusterId, membership);
 
@@ -206,7 +149,6 @@ export function useClusterDrag(
       const svg = clusterGroup.ownerSVGElement;
       if (!svg) return;
 
-      // Collect member node positions — including hidden ones (collapsed state).
       svg.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
         const nodeId = g.getAttribute('data-node-id');
         if (nodeId && allNodeIds.has(nodeId)) {
@@ -215,13 +157,7 @@ export function useClusterDrag(
         }
       });
 
-      const isCollapsed = collapsedClusters.has(clusterId);
-      // For collapsed clusters we need at least the cluster group to move even
-      // if there are somehow no member nodes recorded.
-      if (!isCollapsed && nodeIds.length === 0) return;
-
-      // Record the cluster <g> original translate for collapsed-drag mode.
-      const clusterOriginalPos = readNodeTranslate(clusterGroup as unknown as SVGGElement);
+      if (nodeIds.length === 0) return;
 
       ctx = {
         clusterId,
@@ -231,8 +167,6 @@ export function useClusterDrag(
         startX: e.clientX,
         startY: e.clientY,
         moved: false,
-        isCollapsed,
-        clusterOriginalPos,
       };
 
       clusterGroup.classList.add('mf-cluster--dragging');
