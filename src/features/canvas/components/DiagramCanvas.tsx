@@ -343,17 +343,6 @@ export function DiagramCanvas() {
       effectiveSelection = collectAllNodeIds(selectedClusterId, membership);
     }
 
-    // When an edge is selected, treat its source/target as the effective node selection.
-    if (selectedEdgeIds.size > 0 && selectedNodeIds.size === 0 && !selectedClusterId) {
-      const edgeNodeIds = new Set<string>();
-      for (const edgeId of selectedEdgeIds) {
-        const edgeMeta = edges.find((e) => e.id === edgeId);
-        if (edgeMeta?.sourceId) edgeNodeIds.add(edgeMeta.sourceId);
-        if (edgeMeta?.targetId) edgeNodeIds.add(edgeMeta.targetId);
-      }
-      effectiveSelection = edgeNodeIds;
-    }
-
     // Clear previous highlight classes.
     host.querySelectorAll('.mf-node--source').forEach((el) => el.classList.remove('mf-node--source'));
     host.querySelectorAll('.mf-node--sink').forEach((el) => el.classList.remove('mf-node--sink'));
@@ -369,23 +358,47 @@ export function DiagramCanvas() {
     }
 
     if (hasSelection) {
-      const { sourceNodeIds, sinkNodeIds, connectedEdgeIds } = getConnectedHighlights(
-        effectiveSelection,
-        edges,
-      );
+      if (selectedEdgeIds.size > 0 && selectedNodeIds.size === 0 && !selectedClusterId) {
+        // Edge-only selection: highlight just the two endpoint nodes of the
+        // selected edge(s) as source/sink. Do NOT run the full neighbour
+        // traversal — that would incorrectly highlight every other edge that
+        // touches those nodes, not just the selected one.
+        for (const edgeId of selectedEdgeIds) {
+          const edgeMeta = edges.find((e) => e.id === edgeId);
+          if (!edgeMeta) continue;
+          if (edgeMeta.sourceId) {
+            const g = host.querySelector(`g[data-node-id="${cssEscape(edgeMeta.sourceId)}"]`);
+            g?.classList.add('mf-node--source');
+          }
+          if (edgeMeta.targetId) {
+            const g = host.querySelector(`g[data-node-id="${cssEscape(edgeMeta.targetId)}"]`);
+            g?.classList.add('mf-node--sink');
+          }
+          // The selected edge itself is already marked .mf-edge--selected;
+          // also add connected so the opacity rule keeps it fully visible.
+          const p = host.querySelector(`path[data-edge-id="${cssEscape(edgeId)}"]`);
+          p?.classList.add('mf-edge--connected');
+        }
+      } else {
+        // Node / cluster selection: run full neighbour traversal.
+        const { sourceNodeIds, sinkNodeIds, connectedEdgeIds } = getConnectedHighlights(
+          effectiveSelection,
+          edges,
+        );
 
-      sourceNodeIds.forEach((id) => {
-        const g = host.querySelector(`g[data-node-id="${cssEscape(id)}"]`);
-        g?.classList.add('mf-node--source');
-      });
-      sinkNodeIds.forEach((id) => {
-        const g = host.querySelector(`g[data-node-id="${cssEscape(id)}"]`);
-        g?.classList.add('mf-node--sink');
-      });
-      connectedEdgeIds.forEach((id) => {
-        const p = host.querySelector(`path[data-edge-id="${cssEscape(id)}"]`);
-        p?.classList.add('mf-edge--connected');
-      });
+        sourceNodeIds.forEach((id) => {
+          const g = host.querySelector(`g[data-node-id="${cssEscape(id)}"]`);
+          g?.classList.add('mf-node--source');
+        });
+        sinkNodeIds.forEach((id) => {
+          const g = host.querySelector(`g[data-node-id="${cssEscape(id)}"]`);
+          g?.classList.add('mf-node--sink');
+        });
+        connectedEdgeIds.forEach((id) => {
+          const p = host.querySelector(`path[data-edge-id="${cssEscape(id)}"]`);
+          p?.classList.add('mf-edge--connected');
+        });
+      }
     }
   }, [selectedNodeIds, selectedEdgeIds, selectedClusterId, svg, edges, source]);
 
