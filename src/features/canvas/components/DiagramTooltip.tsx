@@ -3,7 +3,7 @@
  * over a node or edge in the canvas.
  *
  * For nodes:  shows node name + lists of source / sink / bidirectional neighbours
- *             (up to 10 each; … when more exist).
+ *             (up to 20 each; … when more exist, shown side-by-side in columns).
  * For edges:  shows edge label (if any) + the source and target node names.
  *
  * Rendered in a React portal so it sits above all canvas transforms.
@@ -11,7 +11,7 @@
 import { createPortal } from 'react-dom';
 import type { EdgeMeta, NodeMeta } from '@/shared/types/diagram';
 
-const MAX_NAMES = 10;
+const MAX_NAMES = 20;
 
 export interface NodeTooltipInfo {
   kind: 'node';
@@ -70,18 +70,24 @@ export function DiagramTooltip({ info }: Props) {
 }
 
 function NodeTooltipContent({ info }: { info: NodeTooltipInfo }) {
+  const hasSource = info.sourceNames.length > 0 || info.sourceOverflow;
+  const hasSink   = info.sinkNames.length   > 0 || info.sinkOverflow;
+  const hasBidir  = info.bidirNames.length  > 0 || info.bidirOverflow;
+  const colCount  = (hasSource ? 1 : 0) + (hasSink ? 1 : 0) + (hasBidir ? 1 : 0);
   return (
     <>
       <div className="mf-tooltip__title">{info.label || info.nodeId}</div>
-      {(info.sourceNames.length > 0 || info.sourceOverflow) && (
-        <ConnGroup color="amber" label="Sources" names={info.sourceNames} overflow={info.sourceOverflow} />
-      )}
-      {(info.sinkNames.length > 0 || info.sinkOverflow) && (
-        <ConnGroup color="violet" label="Sinks" names={info.sinkNames} overflow={info.sinkOverflow} />
-      )}
-      {(info.bidirNames.length > 0 || info.bidirOverflow) && (
-        <ConnGroup color="teal" label="Bidir ⇔" names={info.bidirNames} overflow={info.bidirOverflow} />
-      )}
+      <div className="mf-tooltip__columns" data-cols={colCount}>
+        {hasSource && (
+          <ConnGroup color="amber" label="Sources" names={info.sourceNames} overflow={info.sourceOverflow} />
+        )}
+        {hasSink && (
+          <ConnGroup color="violet" label="Sinks" names={info.sinkNames} overflow={info.sinkOverflow} />
+        )}
+        {hasBidir && (
+          <ConnGroup color="teal" label="Bidir ⇔" names={info.bidirNames} overflow={info.bidirOverflow} />
+        )}
+      </div>
     </>
   );
 }

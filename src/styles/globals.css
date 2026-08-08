@@ -171,7 +171,10 @@ g.cluster:hover > rect {
   position: fixed;
   z-index: 9999;
   pointer-events: none;
-  max-width: 240px;
+  /* Width grows with the number of visible columns (set via data-cols on the
+     inner .mf-tooltip__columns div). Single-column caps at 200px; two columns
+     at 320px; three columns at 440px. The tooltip itself has no hard max-width
+     so the columns can drive the size naturally. */
   padding: 8px 10px;
   border-radius: 8px;
   background: var(--mf-surface);
@@ -205,13 +208,28 @@ g.cluster:hover > rect {
   white-space: nowrap;
 }
 
-/* Node tooltip: connection groups (Sources / Sinks / Bidir) */
-.mf-tooltip__conn-group {
-  margin-top: 6px;
+/* Node tooltip: column wrapper */
+.mf-tooltip__columns {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-top: 4px;
 }
 
-.mf-tooltip__conn-group:first-of-type {
-  margin-top: 4px;
+/* Width hints per column count so the tooltip doesn't feel too wide/narrow */
+.mf-tooltip__columns[data-cols="1"] { min-width: 120px; max-width: 180px; }
+.mf-tooltip__columns[data-cols="2"] { min-width: 220px; max-width: 320px; }
+.mf-tooltip__columns[data-cols="3"] { min-width: 320px; max-width: 440px; }
+
+/* Each column takes equal space */
+.mf-tooltip__conn-group {
+  flex: 1;
+  min-width: 0;
+}
+
+.mf-tooltip__conn-group + .mf-tooltip__conn-group {
+  border-left: 1px solid var(--mf-border);
+  padding-left: 8px;
 }
 
 .mf-tooltip__conn-header {
@@ -245,6 +263,12 @@ g.cluster:hover > rect {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Thin scrollbar so it doesn't eat column space */
+  scrollbar-width: thin;
+  scrollbar-color: var(--mf-border) transparent;
 }
 
 .mf-tooltip__conn-item {
