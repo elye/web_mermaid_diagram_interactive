@@ -303,22 +303,22 @@ describe('markerScaling', () => {
       crossStartMarker = makeCross('test-crossStart');
     });
 
-    it('should fix crossEnd refX to center (5.5) at scale 1', () => {
+    it('should fix crossEnd refX by preserving original ratio (8.5/11 * 10 ≈ 7.727) at scale 1', () => {
       scaleMarker(crossEndMarker, 1.0, svg);
-      // M-vertices x: [1, 10], center = (1+10)/2 = 5.5
-      expect(parseFloat(crossEndMarker.getAttribute('refX')!)).toBe(5.5);
+      // origRefX=8.5, markerWidth=11, path maxX=10 → ratio=8.5/11, refX=ratio*10 ≈ 7.727
+      expect(parseFloat(crossEndMarker.getAttribute('refX')!)).toBeCloseTo(7.727, 2);
     });
 
-    it('should fix crossStart refX to center (5.5) at scale 1', () => {
+    it('should fix crossStart refX by preserving original ratio (8.5/11 * 10 ≈ 7.727) at scale 1', () => {
       scaleMarker(crossStartMarker, 1.0, svg);
-      expect(parseFloat(crossStartMarker.getAttribute('refX')!)).toBe(5.5);
+      expect(parseFloat(crossStartMarker.getAttribute('refX')!)).toBeCloseTo(7.727, 2);
     });
 
-    it('should set cross refX to center * scale at scale 2', () => {
+    it('should set cross refX to ratio-based value * scale at scale 2', () => {
       const scaledId = scaleMarker(crossEndMarker, 2.0, svg);
       const scaledMarker = document.getElementById(scaledId)!;
-      // center=5.5, scaled 2x = 11
-      expect(parseFloat(scaledMarker.getAttribute('refX')!)).toBe(11);
+      // refX at scale 1 ≈ 7.727, scaled 2x ≈ 15.454
+      expect(parseFloat(scaledMarker.getAttribute('refX')!)).toBeCloseTo(15.454, 2);
     });
 
     it('should scale cross path coordinates', () => {

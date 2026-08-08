@@ -91,11 +91,12 @@ function getPathXRange(pathD: string): { minX: number; maxX: number } | null {
 
 /**
  * Compute the refX attachment point for a marker given its original geometry
- * (with viewBox still present). Returns { refX, isSymmetric }.
+ * (with viewBox still present). Returns the refX value in path/viewBox user space.
  *
  * - Arrow markers (triangles): refX at TIP_ATTACHMENT_RATIO of the tip.
- * - Circle markers (o): refX at the tangent edge (cx ± r).
- * - Symmetric markers (cross x): refX at the horizontal center.
+ * - Circle markers (o): refX at the tangent edge (cx + r for end, cx - r for start).
+ * - Symmetric markers (cross x): preserve the original refX as a ratio of markerWidth,
+ *   mapping it into path coordinate space so it scales proportionally.
  *
  * All coordinates are in the marker's ORIGINAL viewBox/path user space.
  */
@@ -105,9 +106,7 @@ function computeOrigRefX(marker: SVGMarkerElement): number | null {
   if (circle) {
     const cx = parseFloat(circle.getAttribute('cx') || '5');
     const r  = parseFloat(circle.getAttribute('r')  || '5');
-    // For end-markers the line attaches at the right edge; for start-markers at
-    // the left edge. We detect by checking whether the original refX is closer
-    // to cx+r or cx-r.
+    // Detect end- vs start-marker by whether original refX is closer to right or left edge.
     const origRefX = parseFloat(marker.getAttribute('refX') || '0');
     const rightEdge = cx + r;
     const leftEdge  = cx - r;
@@ -126,10 +125,17 @@ function computeOrigRefX(marker: SVGMarkerElement): number | null {
     return tipX * TIP_ATTACHMENT_RATIO;
   }
 
-  // Symmetric marker (cross) — attach at horizontal center.
+  // Symmetric marker (e.g. cross x--x): preserve the original refX ratio.
+  // The original refX is defined in marker units; convert it to path/viewBox
+  // user space so it scales correctly when the geometry is scaled.
+  // Ratio = origRefX / markerWidth; path user space width = maxX (from getPathXRange).
   const range = getPathXRange(pathD);
   if (range) {
-    return (range.minX + range.maxX) / 2;
+    const origRefX  = parseFloat(marker.getAttribute('refX')   || '0');
+    const origWidth = parseFloat(marker.getAttribute('markerWidth') || String(range.maxX));
+    // Map marker-unit refX into path-coordinate space.
+    const ratio = origWidth > 0 ? origRefX / origWidth : 0.5;
+    return ratio * range.maxX;
   }
 
   return null;
