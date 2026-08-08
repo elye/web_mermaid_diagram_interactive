@@ -14,7 +14,7 @@ src/
 │   ├── diagramStore.ts             # Source, rendered SVG, node meta, position overrides
 │   ├── selectionStore.ts           # Selected node/edge/cluster IDs (mutually exclusive)
 │   ├── styleStore.ts               # Per-element style overrides, annotations
-│   ├── uiStore.ts                  # Theme, viewport, toasts, panel state
+│   ├── uiStore.ts                  # Theme, viewport, toasts, panel state, connectivity mode
 │   └── historyStore.ts             # Undo/redo snapshots
 ├── features/
 │   ├── editor/                     # CodeMirror + toolbar + syntax error panel
@@ -80,6 +80,67 @@ Idempotent path rewriting. Called on every render and every drag frame.
 | `selfLoop.ts`           | Kidney-shaped self-loop paths (`D --> D`), with an optional waypoint override that rotates the loop to any side of the node and passes exactly through the drag point. |
 | `endpointInference.ts`  | Given a path with unknown source/target, find the nearest node to each endpoint (fallback when id decoding fails). |
 | `routeEdges.ts`         | Orchestrator: collect node rects, resolve endpoints, emit path (routing through the emitter that matches `EdgeLineStyle` / self-loop / waypoint state), reposition edge labels. |
+
+### `services/graphTraversal.ts` — source/sink connectivity highlights
+
+Pure function that computes which neighbours of the current selection should be
+highlighted, given the flat `EdgeMeta[]` list stored in `diagramStore`.
+
+```ts
+getConnectedHighlights(
+  selectedIds: ReadonlySet<string>,
+  edges: readonly EdgeMeta[],
+): ConnectedHighlights
+// → { sourceNodeIds, sinkNodeIds, connectedEdgeIds }
+```
+
+| Set | Contents |
+| --- | --- |
+| `sourceNodeIds` | Nodes that have at least one edge **pointing into** a selected node (upstream neighbours). Never includes selected nodes themselves. |
+| `sinkNodeIds` | Nodes that at least one selected node has an edge **pointing out to** (downstream neighbours). Never includes selected nodes. |
+| `connectedEdgeIds` | All edges linking selected nodes to their source/sink neighbours, **plus** intra-selection edges and self-loops on selected nodes. |
+
+Self-loops (`A → A`) on a selected node appear in `connectedEdgeIds` but **not**
+in `sourceNodeIds` or `sinkNodeIds` — the node is already in the selection ring.
+
+`DiagramCanvas` calls this after computing an *effective selection* set
+(which expands a cluster selection to its leaf nodes via
+`parseSubgraphMembership` + `collectAllNodeIds`). It then applies a
+**`ConnectivityMode`** filter from `uiStore` before stamping DOM classes:
+
+| Mode | Sources shown | Sinks shown | Connected edges |
+| --- | --- | --- | --- |
+| `both` (default) | ✓ | ✓ | edges to both sides |
+| `only-sources` | ✓ | — | source-side edges only |
+| `only-sinks` | — | ✓ | sink-side edges only |
+| `none` | — | — | — |
+
+The mode is toggled via the **Focus** picker in `CanvasControls` (the `⇄ ← → ○`
+buttons above the zoom controls).
+
+**Edge-selection special case.** When only edges are selected (no nodes),
+`DiagramCanvas` does **not** run the neighbour traversal. Instead it highlights
+only the two endpoint nodes of the selected edge(s) directly as source/sink.
+This prevents "select one line, all other lines connected to its nodes light up"
+behaviour. The same `ConnectivityMode` filter applies: `only-sources` shows
+the source endpoint; `only-sinks` shows the target endpoint. The edge itself is
+only un-dimmed (`.mf-edge--connected`) if at least one endpoint node is
+actually highlighted — if neither endpoint exists in the rendered SVG the edge
+stays dimmed.
+
+**CSS classes applied by `DiagramCanvas`:**
+
+| Class | Applied to | Visual |
+| --- | --- | --- |
+| `.mf-node--source` | Upstream neighbour nodes | Amber drop-shadow glow |
+| `.mf-node--sink` | Downstream neighbour nodes | Violet drop-shadow glow |
+| `.mf-edge--connected` | Connecting edges + self-loops | Blue glow, full opacity |
+| `.mf-canvas--has-selection` | Canvas container | Dims unrelated nodes (0.35) and edges (0.2) |
+
+No store state is added for the derived highlight sets — they are computed
+entirely from `selectedNodeIds` + `edges` + `connectivityMode` on every
+selection/SVG change, so they are always consistent with the current diagram
+without needing synchronisation.
 
 ### `services/edgeIds.ts` — Mermaid id decoding
 
@@ -225,7 +286,13 @@ flowchart LR
    - style overrides (`fill`, `stroke`, `stroke-width`, etc.) — applied to
      **all** shape children so compound shapes (diamonds, etc.) update fully,
    - selection classes (nodes → `.mf-node--selected`, edges →
-     `.mf-edge--selected`).
+     `.mf-edge--selected`),
+   - **connectivity highlights** — calls `getConnectedHighlights` to derive
+     upstream sources (`.mf-node--source`, amber glow) and downstream sinks
+     (`.mf-node--sink`, violet glow), then applies `.mf-edge--connected` to
+     connecting edges. The `.mf-canvas--has-selection` class dims all
+     unrelated nodes/edges. Controlled by `uiStore.connectivityMode`
+     (`both` | `only-sources` | `only-sinks` | `none`).
 5. `useNodeDrag` listens for pointer events on `[data-node-id]` groups. Each
    pointer-move updates the dragged group's transform, calls `routeAllEdges`
    (with line-style / waypoint / anchor-override maps read from the stores) to
@@ -329,6 +396,11 @@ undo keystroke.
 - **Idempotent routing.** `routeAllEdges`, `resizeClusters`, and
   `expandViewBoxToFit` may be called any number of times per frame; they
   always produce the same output for a given SVG state.
+- **Connectivity highlights are derived, never stored.** `sourceNodeIds`,
+  `sinkNodeIds`, and `connectedEdgeIds` are recomputed on every selection or
+  SVG change from `edges` + `selectedNodeIds` + `connectivityMode` — they are
+  never persisted to any store. This keeps the feature zero-cost during
+  autosave, undo/redo, and file load; there is no synchronisation risk.
 - **Cluster membership comes from source, not the DOM.** Mermaid's rendered
   cluster `<g>` is a flat sibling of the nodes group, not their DOM ancestor,
   so `resizeClusters` re-derives membership by parsing the live Mermaid
@@ -379,6 +451,12 @@ undo keystroke.
   include explicit regression cases for the two visually observable bugs
   we've hit — polygon-transform mis-anchoring (diamonds), self-loops, and
   edge-label repositioning.
+- `graphTraversal.test.ts` covers `getConnectedHighlights` and the
+  `ConnectivityMode` filtering logic exhaustively: empty/degenerate cases,
+  linear chains, diamonds, multi-node selections, self-loops, and all four
+  mode values. The filter logic is replicated as a pure helper in the test
+  file (mirroring the `DiagramCanvas` implementation) so coverage doesn't
+  require DOM or React setup.
 - Component tests use Testing Library; interaction tests stay at the hook
   level so we don't couple assertions to markup.
 - Live browser sanity checks use VS Code's browser tools against the running
