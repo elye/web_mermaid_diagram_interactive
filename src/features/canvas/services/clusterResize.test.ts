@@ -251,4 +251,85 @@ flowchart LR
     expect(outer.right).toBeGreaterThanOrEqual(dBBox.right);
     expect(outer.bottom).toBeGreaterThanOrEqual(dBBox.bottom);
   });
+
+  it('does not resize a collapsed cluster when collapsedClusters set is provided', () => {
+    const svg = loadSvg(`
+      <svg xmlns="http://www.w3.org/2000/svg">
+        <g class="clusters">
+          <g class="cluster" id="flowchart-sub1-3" transform="translate(50, 50)">
+            <rect x="-60" y="-20" width="120" height="40"></rect>
+          </g>
+        </g>
+        <g class="nodes">
+          <g data-node-id="A" transform="translate(10, 10)" style="display:none">
+            <rect x="-10" y="-10" width="20" height="20"></rect>
+          </g>
+          <g data-node-id="B" transform="translate(90, 10)" style="display:none">
+            <rect x="-10" y="-10" width="20" height="20"></rect>
+          </g>
+        </g>
+      </svg>`);
+    const src = `
+flowchart LR
+  subgraph sub1
+    A --> B
+  end
+`;
+    // With collapsed set: rect should remain 120x40 (not overridden by member nodes).
+    resizeClusters(svg, src, new Set(['sub1']));
+
+    const box = clusterBBox(svg, 'sub1');
+    expect(box.right - box.left).toBeCloseTo(120); // stays at COLLAPSED_W
+    expect(box.bottom - box.top).toBeCloseTo(40);  // stays at COLLAPSED_H
+  });
+
+  it('parent cluster wraps collapsed child\'s 120x40 box when child is in collapsedClusters', () => {
+    const svg = loadSvg(`
+      <svg xmlns="http://www.w3.org/2000/svg">
+        <g class="clusters">
+          <g class="cluster" id="flowchart-outer-1" transform="translate(200, 200)">
+            <rect x="-200" y="-200" width="400" height="400"></rect>
+          </g>
+          <g class="cluster" id="flowchart-inner-2" transform="translate(100, 100)">
+            <rect x="-60" y="-20" width="120" height="40"></rect>
+          </g>
+        </g>
+        <g class="nodes">
+          <g data-node-id="A" transform="translate(50, 50)" style="display:none">
+            <rect x="-10" y="-10" width="20" height="20"></rect>
+          </g>
+          <g data-node-id="B" transform="translate(90, 50)" style="display:none">
+            <rect x="-10" y="-10" width="20" height="20"></rect>
+          </g>
+          <g data-node-id="C" transform="translate(200, 150)">
+            <rect x="-10" y="-10" width="20" height="20"></rect>
+          </g>
+        </g>
+      </svg>`);
+    const src = `
+flowchart LR
+  subgraph outer
+    subgraph inner
+      A --> B
+    end
+    C
+  end
+`;
+    resizeClusters(svg, src, new Set(['inner']));
+
+    // inner is collapsed at translate(100,100), 120x40 → bbox x:[40,160] y:[80,120]
+    const innerBox = clusterBBox(svg, 'inner');
+    expect(innerBox.right - innerBox.left).toBeCloseTo(120); // not re-expanded
+    expect(innerBox.bottom - innerBox.top).toBeCloseTo(40);
+
+    // outer must wrap the collapsed inner bbox AND visible node C (bbox x:[190,210] y:[140,160])
+    const outerBox = clusterBBox(svg, 'outer');
+    expect(outerBox.left).toBeLessThanOrEqual(innerBox.left);
+    expect(outerBox.top).toBeLessThanOrEqual(innerBox.top);
+    expect(outerBox.right).toBeGreaterThanOrEqual(innerBox.right);
+    expect(outerBox.bottom).toBeGreaterThanOrEqual(innerBox.bottom);
+    expect(outerBox.right).toBeGreaterThanOrEqual(210); // covers C
+    // outer should NOT be 400x400 anymore - it should have shrunk
+    expect(outerBox.right - outerBox.left).toBeLessThan(400);
+  });
 });

@@ -3,7 +3,7 @@
  * wires pan/zoom, node-drag, cluster-drag and edge-drag interactions, and
  * applies style overrides & position overrides on each render.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDiagramStore } from '@/stores/diagramStore';
 import { useStyleStore } from '@/stores/styleStore';
 import { useSelectionStore } from '@/stores/selectionStore';
@@ -18,11 +18,13 @@ import { useMermaidRender } from '../hooks/useMermaidRender';
 import { useCanvasInteraction } from '../hooks/useCanvasInteraction';
 import { useNodeDrag } from '../hooks/useNodeDrag';
 import { useClusterDrag } from '../hooks/useClusterDrag';
+import { useClusterCollapse } from '../hooks/useClusterCollapse';
 import { useEdgeDrag } from '../hooks/useEdgeDrag';
 import { routeAllEdges, expandViewBoxToFit } from '../services/edgeRouter';
 import { resizeClusters } from '../services/clusterResize';
 import { extractClusterUserId } from '../services/cluster/clusterElements';
 import { parseSubgraphMembership, collectAllNodeIds } from '../services/cluster';
+import { computeCollapseState } from '../services/collapseUtils';
 import { contrastColor, setImportantStyle } from '../services/svg/styleUtils';
 import { cssEscape } from '../services/svg';
 import { applyMarkerScaling, applyMarkerStartScaling } from '../services/markerScaling';
@@ -86,6 +88,7 @@ export function DiagramCanvas() {
   const { onPointerDown } = useCanvasInteraction(containerRef);
   useNodeDrag(svgHostRef);
   useClusterDrag(svgHostRef, svg);
+  useClusterCollapse(svgHostRef, svg);
   useEdgeDrag(svgHostRef, edgeDragDeps);
 
   // Inject SVG into DOM, then snapshot each node's natural (Mermaid-computed)
@@ -140,7 +143,10 @@ export function DiagramCanvas() {
 
     routeAllEdges(svgEl, { lineStyles: lineStyleMap, waypoints: waypointMap, anchorOverrides: anchorOverrideMap });
     // Resize subgraph cluster rectangles after position overrides are applied.
-    resizeClusters(svgEl, useDiagramStore.getState().source);
+    // Pass collapsedClusters so collapsed children are skipped (their 120×40 rect
+    // is owned by useClusterCollapse) but still included in parent bbox unions.
+    const { source: src, collapsedClusters: cc } = useDiagramStore.getState();
+    resizeClusters(svgEl, src, cc);
     expandViewBoxToFit(svgEl);
   }, [positionOverrides, svg, lineStyleMap, waypointMap, anchorOverrideMap]);
 
@@ -503,14 +509,24 @@ export function DiagramCanvas() {
       const target = e.target as Element | null;
       if (!target) { setTooltipInfo(null); return; }
 
-      // Check for node
-      const nodeG = target.closest<SVGGElement>('g[data-node-id]');
-      const edgePath = !nodeG
+      // ── Bundled summary edge (collapse overlay) ──
+      const bundlePath = target.closest<SVGPathElement>('.mf-bundle-edge');
+
+      // ── Collapsed cluster hover (rect or label inside a collapsed cluster) ──
+      const clusterG = !bundlePath ? target.closest<SVGGElement>('g.cluster.mf-cluster--collapsed') : null;
+
+      // ── Regular node ──
+      const nodeG = (!bundlePath && !clusterG)
+        ? target.closest<SVGGElement>('g[data-node-id]')
+        : null;
+
+      // ── Regular edge ──
+      const edgePath = (!nodeG && !bundlePath && !clusterG)
         ? (target.closest<SVGPathElement>('path[data-edge-id]') ??
            target.closest<SVGPathElement>('.mf-edge-hit'))
         : null;
 
-      if (!nodeG && !edgePath) {
+      if (!nodeG && !edgePath && !bundlePath && !clusterG) {
         setTooltipInfo(null);
         return;
       }
@@ -519,9 +535,85 @@ export function DiagramCanvas() {
       const cy = e.clientY;
 
       tooltipTimerRef.current = setTimeout(() => {
-        const { edges: currentEdges, nodes: currentNodes } = useDiagramStore.getState();
+        const { edges: currentEdges, nodes: currentNodes, source: currentSource, collapsedClusters: currentCollapsed } = useDiagramStore.getState();
 
-        if (nodeG) {
+        if (bundlePath) {
+          // Bundled summary arrow tooltip.
+          const clusterId = bundlePath.getAttribute('data-mf-bundle-cluster');
+          const externalNodeId = bundlePath.getAttribute('data-mf-bundle-external');
+          const direction = bundlePath.getAttribute('data-mf-bundle-direction') as 'in' | 'out' | 'bidir' | null;
+          const countStr = bundlePath.getAttribute('data-mf-bundle-count');
+          if (!clusterId || !externalNodeId || !direction) return;
+          const extNode = currentNodes.find((n) => n.id === externalNodeId);
+          setTooltipInfo({
+            kind: 'bundled-edge',
+            clusterId,
+            externalNodeLabel: extNode?.label ?? externalNodeId,
+            direction,
+            count: countStr ? Number(countStr) : 1,
+            x: cx,
+            y: cy,
+          });
+        } else if (clusterG) {
+          // Collapsed cluster tooltip.
+          const rawId = clusterG.getAttribute('id') ?? '';
+          // Extract user-facing cluster id from the raw DOM id.
+          const clusterId = extractClusterUserId(rawId);
+          if (!clusterId) return;
+
+          const membership = parseSubgraphMembership(currentSource);
+          const leafIds = collectAllNodeIds(clusterId, membership);
+          const { bundledEdges } = computeCollapseState(currentCollapsed, membership, currentEdges);
+
+          // For a collapsed cluster's tooltip we need to see BOTH:
+          //   (a) bundles where THIS cluster is the source-side (b.clusterId === clusterId)
+          //   (b) bundles where THIS cluster is the external endpoint of another
+          //       collapsed cluster (b.externalNodeId === clusterId). Those record
+          //       the direction from the OTHER cluster's viewpoint, so we invert:
+          //       out↔in, bidir stays.
+          const MAX = 20;
+          const sourceNames: string[] = [];
+          const sinkNames: string[] = [];
+          const bidirNames: string[] = [];
+
+          const invert = (d: 'in' | 'out' | 'bidir') => (d === 'in' ? 'out' : d === 'out' ? 'in' : 'bidir');
+
+          for (const b of bundledEdges) {
+            let selfSide: string;
+            let otherSide: string;
+            let dir: 'in' | 'out' | 'bidir';
+            if (b.clusterId === clusterId) {
+              selfSide = clusterId;
+              otherSide = b.externalNodeId;
+              dir = b.direction;
+            } else if (b.externalNodeId === clusterId) {
+              selfSide = clusterId;
+              otherSide = b.clusterId;
+              dir = invert(b.direction);
+            } else {
+              continue;
+            }
+            void selfSide;
+            const extNode = currentNodes.find((n) => n.id === otherSide);
+            const label = extNode?.label ?? otherSide;
+            if (dir === 'in') sourceNames.push(label);
+            else if (dir === 'out') sinkNames.push(label);
+            else bidirNames.push(label);
+          }
+          setTooltipInfo({
+            kind: 'collapsed-cluster',
+            clusterId,
+            memberCount: leafIds.size,
+            sourceNames: sourceNames.slice(0, MAX),
+            sourceOverflow: sourceNames.length > MAX,
+            sinkNames: sinkNames.slice(0, MAX),
+            sinkOverflow: sinkNames.length > MAX,
+            bidirNames: bidirNames.slice(0, MAX),
+            bidirOverflow: bidirNames.length > MAX,
+            x: cx,
+            y: cy,
+          });
+        } else if (nodeG) {
           const nodeId = nodeG.getAttribute('data-node-id');
           if (!nodeId) return;
           const nodeMeta = currentNodes.find((n) => n.id === nodeId);
