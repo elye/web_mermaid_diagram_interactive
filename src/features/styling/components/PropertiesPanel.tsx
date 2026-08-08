@@ -27,6 +27,15 @@ function NodePropertiesPanel() {
 
   const firstId = Array.from(selectedNodeIds)[0];
   const current = nodeStyles[firstId] ?? {};
+
+  // When no user override is stored yet, read the actual rendered SVG color
+  // so the pickers reflect what the node currently looks like.
+  const svgDefaults = readSvgNodeColors(firstId);
+
+  const fillValue      = current.fill      ?? svgDefaults.fill;
+  const strokeValue    = current.stroke    ?? svgDefaults.stroke;
+  const fontColorValue = current.fontColor ?? svgDefaults.fontColor;
+
   // Groups a burst of edits (slider drag, rapid preset clicks, etc.) to the
   // same selected node(s) into a single undo step — see historyStore's
   // `commitCoalesced` doc comment.
@@ -42,6 +51,7 @@ function NodePropertiesPanel() {
   const resetAll = () => {
     commit();
     selectedNodeIds.forEach((id) => clearNodeStyle(id));
+    setTimeout(() => setSvgDefaults(readSvgNodeColors(firstId)), 50);
   };
 
   return (
@@ -60,7 +70,7 @@ function NodePropertiesPanel() {
         <input
           type="color"
           aria-label="Fill color"
-          value={current.fill ?? '#ffffff'}
+          value={fillValue}
           onChange={(e) => applyProp({ fill: e.target.value })}
           className="h-8 w-full cursor-pointer rounded border border-border bg-surface"
         />
@@ -71,7 +81,7 @@ function NodePropertiesPanel() {
         <input
           type="color"
           aria-label="Stroke color"
-          value={current.stroke ?? '#333333'}
+          value={strokeValue}
           onChange={(e) => applyProp({ stroke: e.target.value })}
           className="h-8 w-full cursor-pointer rounded border border-border bg-surface"
         />
@@ -97,7 +107,7 @@ function NodePropertiesPanel() {
         <input
           type="color"
           aria-label="Font color"
-          value={current.fontColor ?? '#000000'}
+          value={fontColorValue}
           onChange={(e) => applyProp({ fontColor: e.target.value })}
           className="h-8 w-full cursor-pointer rounded border border-border bg-surface"
         />
@@ -283,7 +293,7 @@ function EdgePropertiesPanel() {
 // ─── Cluster Properties ──────────────────────────────────────────────────────────
 
 /** Convert rgb(r, g, b) / rgba(…) / any CSS color to a #rrggbb hex string. */
-function cssColorToHex(css: string): string {
+export function cssColorToHex(css: string): string {
   try {
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 1;
@@ -297,8 +307,25 @@ function cssColorToHex(css: string): string {
   }
 }
 
+/** Read the computed fill/stroke/fontColor of a node's shape from the live SVG.
+ *  nodeId is the Mermaid user-facing id (e.g. "A"), NOT the DOM element id
+ *  (e.g. "flowchart-A-0") — look up via data-node-id attribute. */
+export function readSvgNodeColors(nodeId: string): { fill: string; stroke: string; fontColor: string } {
+  const g = document.querySelector<SVGGElement>(`g[data-node-id="${CSS.escape(nodeId)}"]`);
+  const shape = g?.querySelector('rect.basic, polygon, ellipse, path.basic') ?? g?.querySelector('rect');
+  const text = g?.querySelector('text');
+  if (!shape) return { fill: '#ffffff', stroke: '#333333', fontColor: '#000000' };
+  const cs = getComputedStyle(shape);
+  const tcs = text ? getComputedStyle(text) : null;
+  return {
+    fill: cssColorToHex(cs.fill || '#ffffff'),
+    stroke: cssColorToHex(cs.stroke || '#333333'),
+    fontColor: tcs ? cssColorToHex(tcs.fill || '#000000') : '#000000',
+  };
+}
+
 /** Read the computed fill/stroke of a cluster's rect from the live SVG. */
-function readSvgClusterColors(clusterId: string): { fill: string; stroke: string } {
+export function readSvgClusterColors(clusterId: string): { fill: string; stroke: string } {
   const g = document.getElementById(clusterId);
   const rect = g?.querySelector('rect');
   if (!rect) return { fill: '#ffffff', stroke: '#999999' };
@@ -429,8 +456,8 @@ export function PropertiesPanel() {
   const selectedClusterId = useSelectionStore((s) => s.selectedClusterId);
 
   if (selectedClusterId) return <ClusterPropertiesPanel />;
-  if (selectedNodeIds.size > 0) return <NodePropertiesPanel />;
-  if (selectedEdgeIds.size > 0) return <EdgePropertiesPanel />;
+  if (selectedNodeIds.size > 0) return <NodePropertiesPanel key={Array.from(selectedNodeIds).sort().join(',')} />;
+  if (selectedEdgeIds.size > 0) return <EdgePropertiesPanel key={Array.from(selectedEdgeIds).sort().join(',')} />;
   return null;
 }
 
