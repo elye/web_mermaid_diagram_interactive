@@ -17,6 +17,8 @@ export interface ConnectedHighlights {
   sourceNodeIds: Set<string>;
   sinkNodeIds: Set<string>;
   connectedEdgeIds: Set<string>;
+  /** Subset of connectedEdgeIds: only edges that are bidirectional (<-->). */
+  bidirectionalEdgeIds: Set<string>;
 }
 
 /**
@@ -33,9 +35,10 @@ export function getConnectedHighlights(
   const sourceNodeIds = new Set<string>();
   const sinkNodeIds = new Set<string>();
   const connectedEdgeIds = new Set<string>();
+  const bidirectionalEdgeIds = new Set<string>();
 
   if (selectedIds.size === 0) {
-    return { sourceNodeIds, sinkNodeIds, connectedEdgeIds };
+    return { sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds };
   }
 
   for (const edge of edges) {
@@ -60,6 +63,7 @@ export function getConnectedHighlights(
         // Bidirectional edge also flows OUT OF the selected node → sourceId
         // is simultaneously a downstream sink (B feeds into A as well).
         sinkNodeIds.add(sourceId);
+        bidirectionalEdgeIds.add(id);
       }
     }
 
@@ -71,9 +75,10 @@ export function getConnectedHighlights(
         // Bidirectional edge also flows INTO the selected node → targetId
         // is simultaneously an upstream source.
         sourceNodeIds.add(targetId);
+        bidirectionalEdgeIds.add(id);
       }
     }
   }
 
-  return { sourceNodeIds, sinkNodeIds, connectedEdgeIds };
+  return { sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds };
 }

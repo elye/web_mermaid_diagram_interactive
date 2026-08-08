@@ -369,14 +369,20 @@ export function DiagramCanvas() {
           if (!edgeMeta) continue;
           // In edge-selection context, source endpoint = "source", target = "sink".
           // Respect the connectivity mode: only-sources hides the sink end, only-sinks hides the source end.
+          // only-both: highlight both endpoints only if the edge is bidirectional.
           let anyEndpointHighlighted = false;
-          if (edgeMeta.sourceId && connectivityMode !== 'only-sinks') {
-            const g = host.querySelector(`g[data-node-id="${cssEscape(edgeMeta.sourceId)}"]`);
-            if (g) { g.classList.add('mf-node--source'); anyEndpointHighlighted = true; }
-          }
-          if (edgeMeta.targetId && connectivityMode !== 'only-sources') {
-            const g = host.querySelector(`g[data-node-id="${cssEscape(edgeMeta.targetId)}"]`);
-            if (g) { g.classList.add('mf-node--sink'); anyEndpointHighlighted = true; }
+          const isBidir = edgeMeta.bidirectional ?? false;
+          if (connectivityMode === 'only-both' && !isBidir) {
+            // Not a bidirectional edge — show nothing in only-both mode.
+          } else {
+            if (edgeMeta.sourceId && connectivityMode !== 'only-sinks') {
+              const g = host.querySelector(`g[data-node-id="${cssEscape(edgeMeta.sourceId)}"]`);
+              if (g) { g.classList.add('mf-node--source'); anyEndpointHighlighted = true; }
+            }
+            if (edgeMeta.targetId && connectivityMode !== 'only-sources') {
+              const g = host.querySelector(`g[data-node-id="${cssEscape(edgeMeta.targetId)}"]`);
+              if (g) { g.classList.add('mf-node--sink'); anyEndpointHighlighted = true; }
+            }
           }
           // Only keep the edge un-dimmed when at least one endpoint node is
           // actually highlighted — if neither endpoint exists in the rendered
@@ -388,53 +394,81 @@ export function DiagramCanvas() {
         }
       } else {
         // Node / cluster selection: run full neighbour traversal.
-        const { sourceNodeIds, sinkNodeIds, connectedEdgeIds } = getConnectedHighlights(
+        const { sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds } = getConnectedHighlights(
           effectiveSelection,
           edges,
         );
 
-        // connectedEdgeIds covers edges to both sources and sinks; when the
-        // mode restricts to one side we must also filter which edges to show.
-        const shownSourceIds = connectivityMode !== 'only-sinks'  ? sourceNodeIds : new Set<string>();
-        const shownSinkIds   = connectivityMode !== 'only-sources' ? sinkNodeIds   : new Set<string>();
-
-        shownSourceIds.forEach((id) => {
-          const g = host.querySelector(`g[data-node-id="${cssEscape(id)}"]`);
-          g?.classList.add('mf-node--source');
-        });
-        shownSinkIds.forEach((id) => {
-          const g = host.querySelector(`g[data-node-id="${cssEscape(id)}"]`);
-          g?.classList.add('mf-node--sink');
-        });
-
-        // Only keep connected-edge highlights for the visible side(s).
-        // An edge belongs to the "sources" side when its source node is a
-        // highlighted source (i.e. upstream of the selection) — meaning the
-        // edge runs from a source neighbour INTO the selection.
-        // An edge belongs to the "sinks" side when its target node is a
-        // highlighted sink (i.e. downstream of the selection).
-        // We do NOT use effectiveSelection membership here: an edge whose
-        // selected-end is in effectiveSelection but whose neighbour-end is
-        // not shown should stay dimmed (e.g. B→C stays dimmed when only
-        // sources are shown, even though B is selected).
-        connectedEdgeIds.forEach((id) => {
-          const p = host.querySelector(`path[data-edge-id="${cssEscape(id)}"]`);
-          if (!p) return;
-          const edgeSrc = p.getAttribute('data-edge-source');
-          const edgeTgt = p.getAttribute('data-edge-target');
-          // source-side edge: flows from a source neighbour into the selection
-          const isSourceEdge = edgeSrc ? shownSourceIds.has(edgeSrc) : false;
-          // sink-side edge: flows from the selection out to a sink neighbour.
-          // For bidirectional edges (A <--> B) with B selected, the sink is the
-          // edge's source end (A), so check both ends.
-          const isSinkEdge = (edgeTgt ? shownSinkIds.has(edgeTgt) : false)
-                          || (edgeSrc ? shownSinkIds.has(edgeSrc) : false);
-          // self-loop: both ends on a selected node — always keep visible
-          const isSelfLoop = edgeSrc != null && edgeSrc === edgeTgt && effectiveSelection.has(edgeSrc);
-          if (isSourceEdge || isSinkEdge || isSelfLoop) {
+        if (connectivityMode === 'only-both') {
+          // only-both: show only nodes/edges connected via bidirectional (<-->) edges.
+          // The mutual neighbour is simultaneously source AND sink, so apply both classes.
+          bidirectionalEdgeIds.forEach((id) => {
+            const p = host.querySelector(`path[data-edge-id="${cssEscape(id)}"]`);
+            if (!p) return;
             p.classList.add('mf-edge--connected');
-          }
-        });
+            const edgeSrc = p.getAttribute('data-edge-source');
+            const edgeTgt = p.getAttribute('data-edge-target');
+            // The neighbour is whichever end is NOT in the selection.
+            const neighbourId = edgeSrc && !effectiveSelection.has(edgeSrc) ? edgeSrc
+                              : edgeTgt && !effectiveSelection.has(edgeTgt) ? edgeTgt
+                              : null;
+            if (neighbourId) {
+              const g = host.querySelector(`g[data-node-id="${cssEscape(neighbourId)}"]`);
+              // Apply both source and sink glow to indicate mutual connection.
+              g?.classList.add('mf-node--source');
+              g?.classList.add('mf-node--sink');
+            }
+          });
+        } else {
+          // connectedEdgeIds covers edges to both sources and sinks; when the
+          // mode restricts to one side we must also filter which edges to show.
+          const shownSourceIds = connectivityMode !== 'only-sinks'   ? sourceNodeIds : new Set<string>();
+          const shownSinkIds   = connectivityMode !== 'only-sources' ? sinkNodeIds   : new Set<string>();
+
+          shownSourceIds.forEach((id) => {
+            const g = host.querySelector(`g[data-node-id="${cssEscape(id)}"]`);
+            g?.classList.add('mf-node--source');
+          });
+          shownSinkIds.forEach((id) => {
+            const g = host.querySelector(`g[data-node-id="${cssEscape(id)}"]`);
+            g?.classList.add('mf-node--sink');
+          });
+
+          // Only keep connected-edge highlights for the visible side(s).
+          // An edge belongs to the "sources" side when its source node is a
+          // highlighted source (i.e. upstream of the selection) — meaning the
+          // edge runs from a source neighbour INTO the selection.
+          // An edge belongs to the "sinks" side when its target node is a
+          // highlighted sink (i.e. downstream of the selection).
+          // We do NOT use effectiveSelection membership here: an edge whose
+          // selected-end is in effectiveSelection but whose neighbour-end is
+          // not shown should stay dimmed (e.g. B→C stays dimmed when only
+          // sources are shown, even though B is selected).
+          connectedEdgeIds.forEach((id) => {
+            const p = host.querySelector(`path[data-edge-id="${cssEscape(id)}"]`);
+            if (!p) return;
+            const edgeSrc = p.getAttribute('data-edge-source');
+            const edgeTgt = p.getAttribute('data-edge-target');
+            const edgeMeta = edges.find((e) => e.id === id);
+            // source-side edge: flows from a source neighbour into the selection.
+            // For bidirectional edges the source neighbour may be at the tgt end
+            // (edge runs "backwards"), so check both ends when bidir.
+            const isSourceEdge = (edgeSrc ? shownSourceIds.has(edgeSrc) : false)
+                               || (edgeMeta?.bidirectional && edgeTgt ? shownSourceIds.has(edgeTgt) : false);
+            // sink-side edge: flows from the selection out to a sink neighbour.
+            // For bidirectional edges (A <--> B) with B selected, the physical
+            // source end (A) is also the sink neighbour, so check src too — but
+            // only when the edge itself is bidirectional (avoids showing directed
+            // edges that happen to originate from a bidir-marked sink neighbour).
+            const isSinkEdge = (edgeTgt ? shownSinkIds.has(edgeTgt) : false)
+                            || (edgeMeta?.bidirectional && edgeSrc ? shownSinkIds.has(edgeSrc) : false);
+            // self-loop: both ends on a selected node — always keep visible
+            const isSelfLoop = edgeSrc != null && edgeSrc === edgeTgt && effectiveSelection.has(edgeSrc);
+            if (isSourceEdge || isSinkEdge || isSelfLoop) {
+              p.classList.add('mf-edge--connected');
+            }
+          });
+        }
       }
     }
   }, [selectedNodeIds, selectedEdgeIds, selectedClusterId, svg, edges, source, connectivityMode]);

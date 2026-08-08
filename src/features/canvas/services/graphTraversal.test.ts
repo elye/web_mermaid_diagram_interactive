@@ -179,18 +179,36 @@ describe('getConnectedHighlights — selected nodes excluded from source/sink', 
 // getConnectedHighlights to implement the four ConnectivityMode values.
 // We replicate the exact same filter rules here so they're covered without a DOM.
 
-type ConnectivityMode = 'both' | 'only-sources' | 'only-sinks' | 'none';
+type ConnectivityMode = 'both' | 'only-sources' | 'only-sinks' | 'only-both' | 'none';
 
 function applyMode(
   mode: ConnectivityMode,
   sourceNodeIds: Set<string>,
   sinkNodeIds: Set<string>,
   connectedEdgeIds: Set<string>,
+  bidirectionalEdgeIds: Set<string>,
   edgesById: Map<string, EdgeMeta>,
   effectiveSelection: ReadonlySet<string>,
 ): { shownSources: Set<string>; shownSinks: Set<string>; shownEdges: Set<string> } {
   if (mode === 'none') {
     return { shownSources: new Set(), shownSinks: new Set(), shownEdges: new Set() };
+  }
+  if (mode === 'only-both') {
+    // Mirror DiagramCanvas only-both branch: only bidirectional edges shown,
+    // neighbour gets both source and sink highlight.
+    const shownSources = new Set<string>();
+    const shownSinks   = new Set<string>();
+    const shownEdges   = new Set<string>(bidirectionalEdgeIds);
+    for (const id of bidirectionalEdgeIds) {
+      const e = edgesById.get(id);
+      if (!e) continue;
+      const { sourceId: src, targetId: tgt } = e;
+      const neighbourId = src && !effectiveSelection.has(src) ? src
+                        : tgt && !effectiveSelection.has(tgt) ? tgt
+                        : null;
+      if (neighbourId) { shownSources.add(neighbourId); shownSinks.add(neighbourId); }
+    }
+    return { shownSources, shownSinks, shownEdges };
   }
   const shownSources = mode !== 'only-sinks'   ? sourceNodeIds : new Set<string>();
   const shownSinks   = mode !== 'only-sources' ? sinkNodeIds   : new Set<string>();
@@ -200,10 +218,14 @@ function applyMode(
     const e = edgesById.get(id);
     if (!e) continue;
     const { sourceId: src, targetId: tgt } = e;
-    const isSourceEdge = src ? shownSources.has(src) : false;
-    // Mirror DiagramCanvas: for bidirectional edges check both ends against shownSinks.
+    // For bidirectional edges the source neighbour may be at either end, so
+    // check both: src for normal edges, tgt when the edge runs "backwards".
+    const isSourceEdge = (src ? shownSources.has(src) : false)
+                      || (e.bidirectional && tgt ? shownSources.has(tgt) : false);
+    // Mirror DiagramCanvas: for bidirectional edges also check src end against
+    // shownSinks (the sink neighbour is at the source end when the edge is flipped).
     const isSinkEdge   = (tgt ? shownSinks.has(tgt) : false)
-                      || (src ? shownSinks.has(src) : false);
+                      || (e.bidirectional && src ? shownSinks.has(src) : false);
     const isSelfLoop   = src != null && src === tgt && effectiveSelection.has(src);
     if (isSourceEdge || isSinkEdge || isSelfLoop) shownEdges.add(id);
   }
@@ -215,11 +237,11 @@ describe('ConnectivityMode filtering — A → B → C, selecting B', () => {
   const edges = [edge('e1', 'A', 'B'), edge('e2', 'B', 'C')];
   const edgesById = new Map(edges.map((e) => [e.id, e]));
   const selection = sel('B');
-  const { sourceNodeIds, sinkNodeIds, connectedEdgeIds } = getConnectedHighlights(selection, edges);
+  const { sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds } = getConnectedHighlights(selection, edges);
 
   it('mode=both: A highlighted as source, C as sink, both edges shown', () => {
     const { shownSources, shownSinks, shownEdges } = applyMode(
-      'both', sourceNodeIds, sinkNodeIds, connectedEdgeIds, edgesById, selection,
+      'both', sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds, edgesById, selection,
     );
     expect([...shownSources]).toEqual(['A']);
     expect([...shownSinks]).toEqual(['C']);
@@ -228,7 +250,7 @@ describe('ConnectivityMode filtering — A → B → C, selecting B', () => {
 
   it('mode=only-sources: A highlighted, C not; only e1 (A→B) shown', () => {
     const { shownSources, shownSinks, shownEdges } = applyMode(
-      'only-sources', sourceNodeIds, sinkNodeIds, connectedEdgeIds, edgesById, selection,
+      'only-sources', sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds, edgesById, selection,
     );
     expect([...shownSources]).toEqual(['A']);
     expect(shownSinks.size).toBe(0);
@@ -237,7 +259,7 @@ describe('ConnectivityMode filtering — A → B → C, selecting B', () => {
 
   it('mode=only-sinks: C highlighted, A not; only e2 (B→C) shown', () => {
     const { shownSources, shownSinks, shownEdges } = applyMode(
-      'only-sinks', sourceNodeIds, sinkNodeIds, connectedEdgeIds, edgesById, selection,
+      'only-sinks', sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds, edgesById, selection,
     );
     expect(shownSources.size).toBe(0);
     expect([...shownSinks]).toEqual(['C']);
@@ -246,7 +268,7 @@ describe('ConnectivityMode filtering — A → B → C, selecting B', () => {
 
   it('mode=none: nothing shown', () => {
     const { shownSources, shownSinks, shownEdges } = applyMode(
-      'none', sourceNodeIds, sinkNodeIds, connectedEdgeIds, edgesById, selection,
+      'none', sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds, edgesById, selection,
     );
     expect(shownSources.size).toBe(0);
     expect(shownSinks.size).toBe(0);
@@ -278,25 +300,30 @@ describe('ConnectivityMode filtering — bidirectional A <--> B, selecting B', (
   const edges = [biEdge('e1', 'A', 'B')];
   const edgesById = new Map(edges.map((e) => [e.id, e]));
   const selection = sel('B');
-  const { sourceNodeIds, sinkNodeIds, connectedEdgeIds } = getConnectedHighlights(selection, edges);
+  const { sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds } = getConnectedHighlights(selection, edges);
 
   it('mode=both: e1 shown', () => {
-    const { shownEdges } = applyMode('both', sourceNodeIds, sinkNodeIds, connectedEdgeIds, edgesById, selection);
+    const { shownEdges } = applyMode('both', sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds, edgesById, selection);
     expect(shownEdges.has('e1')).toBe(true);
   });
 
   it('mode=only-sources: e1 shown (A is a source)', () => {
-    const { shownEdges } = applyMode('only-sources', sourceNodeIds, sinkNodeIds, connectedEdgeIds, edgesById, selection);
+    const { shownEdges } = applyMode('only-sources', sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds, edgesById, selection);
     expect(shownEdges.has('e1')).toBe(true);
   });
 
   it('mode=only-sinks: e1 shown (A is also a sink)', () => {
-    const { shownEdges } = applyMode('only-sinks', sourceNodeIds, sinkNodeIds, connectedEdgeIds, edgesById, selection);
+    const { shownEdges } = applyMode('only-sinks', sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds, edgesById, selection);
+    expect(shownEdges.has('e1')).toBe(true);
+  });
+
+  it('mode=only-both: e1 shown (bidirectional)', () => {
+    const { shownEdges } = applyMode('only-both', sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds, edgesById, selection);
     expect(shownEdges.has('e1')).toBe(true);
   });
 
   it('mode=none: e1 hidden', () => {
-    const { shownEdges } = applyMode('none', sourceNodeIds, sinkNodeIds, connectedEdgeIds, edgesById, selection);
+    const { shownEdges } = applyMode('none', sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds, edgesById, selection);
     expect(shownEdges.has('e1')).toBe(false);
   });
 });
@@ -306,12 +333,12 @@ describe('ConnectivityMode filtering — self-loop on selected node', () => {
   const edges = [edge('loop', 'A', 'A'), edge('e1', 'A', 'B')];
   const edgesById = new Map(edges.map((e) => [e.id, e]));
   const selection = sel('A');
-  const { sourceNodeIds, sinkNodeIds, connectedEdgeIds } = getConnectedHighlights(selection, edges);
+  const { sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds } = getConnectedHighlights(selection, edges);
 
   it('self-loop is shown in all non-none modes', () => {
     for (const mode of ['both', 'only-sources', 'only-sinks'] as ConnectivityMode[]) {
       const { shownEdges } = applyMode(
-        mode, sourceNodeIds, sinkNodeIds, connectedEdgeIds, edgesById, selection,
+        mode, sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds, edgesById, selection,
       );
       expect(shownEdges.has('loop'), `mode=${mode}: self-loop should be shown`).toBe(true);
     }
@@ -319,19 +346,134 @@ describe('ConnectivityMode filtering — self-loop on selected node', () => {
 
   it('self-loop is hidden in none mode', () => {
     const { shownEdges } = applyMode(
-      'none', sourceNodeIds, sinkNodeIds, connectedEdgeIds, edgesById, selection,
+      'none', sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds, edgesById, selection,
     );
     expect(shownEdges.has('loop')).toBe(false);
   });
 
   it('e1 (A→B, sink edge) is shown in both and only-sinks, not in only-sources', () => {
-    const bothResult = applyMode('both', sourceNodeIds, sinkNodeIds, connectedEdgeIds, edgesById, selection);
+    const bothResult = applyMode('both', sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds, edgesById, selection);
     expect(bothResult.shownEdges.has('e1')).toBe(true);
 
-    const sinksResult = applyMode('only-sinks', sourceNodeIds, sinkNodeIds, connectedEdgeIds, edgesById, selection);
+    const sinksResult = applyMode('only-sinks', sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds, edgesById, selection);
     expect(sinksResult.shownEdges.has('e1')).toBe(true);
 
-    const sourcesResult = applyMode('only-sources', sourceNodeIds, sinkNodeIds, connectedEdgeIds, edgesById, selection);
+    const sourcesResult = applyMode('only-sources', sourceNodeIds, sinkNodeIds, connectedEdgeIds, bidirectionalEdgeIds, edgesById, selection);
     expect(sourcesResult.shownEdges.has('e1')).toBe(false);
+  });
+});
+
+// ─── Full scenario: G→H, H→G, G<––>H, H<––>G ───────────────────────────────
+//
+// e1: G → H  (directed)
+// e2: H → G  (directed)
+// e3: G <––> H  (bidirectional, source=G target=H)
+// e4: H <––> G  (bidirectional, source=H target=G)
+
+describe('Full scenario — G→H, H→G, G<-->H, H<-->G', () => {
+  const edges = [
+    edge  ('e1', 'G', 'H'),   // G → H
+    edge  ('e2', 'H', 'G'),   // H → G
+    biEdge('e3', 'G', 'H'),   // G <––> H
+    biEdge('e4', 'H', 'G'),   // H <––> G
+  ];
+  const edgesById = new Map(edges.map((e) => [e.id, e]));
+
+  // ── select G ──
+  describe('selecting G', () => {
+    const selection = sel('G');
+    const r = getConnectedHighlights(selection, edges);
+
+    it('H is both source and sink', () => {
+      expect(r.sourceNodeIds.has('H')).toBe(true);
+      expect(r.sinkNodeIds.has('H')).toBe(true);
+    });
+
+    it('all four edges are in connectedEdgeIds', () => {
+      expect([...r.connectedEdgeIds].sort()).toEqual(['e1', 'e2', 'e3', 'e4']);
+    });
+
+    it('only-sources shows e2, e3, e4 — bidir edges shown via either end; directed e1 (G→H) hidden', () => {
+      // shownSources=H, shownSinks={}.
+      // e2 (H→G directed): src=H ∈ shownSources → shown.
+      // e4 (H→G bidir): src=H ∈ shownSources → shown.
+      // e3 (G→H bidir): src=G (selected), tgt=H ∈ shownSources AND bidir → shown.
+      // e1 (G→H directed): src=G (selected), tgt=H but not bidir → hidden.
+      const { shownEdges } = applyMode('only-sources', r.sourceNodeIds, r.sinkNodeIds, r.connectedEdgeIds, r.bidirectionalEdgeIds, edgesById, selection);
+      expect(shownEdges.has('e2')).toBe(true);
+      expect(shownEdges.has('e3')).toBe(true);
+      expect(shownEdges.has('e4')).toBe(true);
+      expect(shownEdges.has('e1')).toBe(false);
+    });
+
+    it('only-sinks shows e1, e3 (tgt=H), e4 (bidir src=H) — directed e2 (H→G) hidden', () => {
+      // shownSinks=H (from sinkNodeIds), shownSources={}.
+      // e1 (G→H directed): tgt=H ∈ shownSinks → shown.
+      // e3 (G→H bidir): tgt=H ∈ shownSinks → shown.
+      // e4 (H→G bidir): tgt=G (selected), src=H ∈ shownSinks, bidir → shown.
+      // e2 (H→G directed): tgt=G (selected), src=H but not bidir → hidden.
+      const { shownEdges } = applyMode('only-sinks', r.sourceNodeIds, r.sinkNodeIds, r.connectedEdgeIds, r.bidirectionalEdgeIds, edgesById, selection);
+      expect(shownEdges.has('e1')).toBe(true);
+      expect(shownEdges.has('e2')).toBe(false);
+      expect(shownEdges.has('e3')).toBe(true);
+      expect(shownEdges.has('e4')).toBe(true);
+    });
+
+    it('only-both shows only e3 and e4 (bidirectional edges)', () => {
+      const { shownEdges } = applyMode('only-both', r.sourceNodeIds, r.sinkNodeIds, r.connectedEdgeIds, r.bidirectionalEdgeIds, edgesById, selection);
+      expect(shownEdges.has('e3')).toBe(true);
+      expect(shownEdges.has('e4')).toBe(true);
+      expect(shownEdges.has('e1')).toBe(false);
+      expect(shownEdges.has('e2')).toBe(false);
+    });
+  });
+
+  // ── select H ──
+  describe('selecting H', () => {
+    const selection = sel('H');
+    const r = getConnectedHighlights(selection, edges);
+
+    it('G is both source and sink', () => {
+      expect(r.sourceNodeIds.has('G')).toBe(true);
+      expect(r.sinkNodeIds.has('G')).toBe(true);
+    });
+
+    it('all four edges are in connectedEdgeIds', () => {
+      expect([...r.connectedEdgeIds].sort()).toEqual(['e1', 'e2', 'e3', 'e4']);
+    });
+
+    it('only-sources shows e1, e3, e4 — bidir edges shown via either end; directed e2 (H→G) hidden', () => {
+      // shownSources=G, shownSinks={}.
+      // e1 (G→H directed): src=G ∈ shownSources → shown.
+      // e3 (G→H bidir): src=G ∈ shownSources → shown.
+      // e4 (H→G bidir): src=H (selected), tgt=G ∈ shownSources AND bidir → shown.
+      // e2 (H→G directed): src=H (selected), tgt=G but not bidir → hidden.
+      const { shownEdges } = applyMode('only-sources', r.sourceNodeIds, r.sinkNodeIds, r.connectedEdgeIds, r.bidirectionalEdgeIds, edgesById, selection);
+      expect(shownEdges.has('e1')).toBe(true);
+      expect(shownEdges.has('e3')).toBe(true);
+      expect(shownEdges.has('e4')).toBe(true);
+      expect(shownEdges.has('e2')).toBe(false);
+    });
+
+    it('only-sinks shows e2 (tgt=G), e3 (bidir src=G), e4 (tgt=G) — directed e1 (G→H) hidden', () => {
+      // shownSinks=G (from sinkNodeIds), shownSources={}.
+      // e2 (H→G directed): tgt=G ∈ shownSinks → shown.
+      // e4 (H→G bidir): tgt=G ∈ shownSinks → shown.
+      // e3 (G→H bidir): tgt=H (not G), src=G ∈ shownSinks, bidir → shown.
+      // e1 (G→H directed): tgt=H (not G), src=G but not bidir → hidden.
+      const { shownEdges } = applyMode('only-sinks', r.sourceNodeIds, r.sinkNodeIds, r.connectedEdgeIds, r.bidirectionalEdgeIds, edgesById, selection);
+      expect(shownEdges.has('e1')).toBe(false);
+      expect(shownEdges.has('e2')).toBe(true);
+      expect(shownEdges.has('e3')).toBe(true);
+      expect(shownEdges.has('e4')).toBe(true);
+    });
+
+    it('only-both shows only e3 and e4', () => {
+      const { shownEdges } = applyMode('only-both', r.sourceNodeIds, r.sinkNodeIds, r.connectedEdgeIds, r.bidirectionalEdgeIds, edgesById, selection);
+      expect(shownEdges.has('e3')).toBe(true);
+      expect(shownEdges.has('e4')).toBe(true);
+      expect(shownEdges.has('e1')).toBe(false);
+      expect(shownEdges.has('e2')).toBe(false);
+    });
   });
 });

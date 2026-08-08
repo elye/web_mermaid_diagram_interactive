@@ -12,9 +12,10 @@ export type Theme = 'light' | 'dark' | 'system';
  *   both        — sources (upstream) AND sinks (downstream) are highlighted (default)
  *   only-sources — only upstream source nodes are highlighted
  *   only-sinks   — only downstream sink nodes are highlighted
+ *   only-both    — only bidirectional neighbours (<-->) are highlighted
  *   none         — no connectivity highlighting
  */
-export type ConnectivityMode = 'both' | 'only-sources' | 'only-sinks' | 'none';
+export type ConnectivityMode = 'both' | 'only-sources' | 'only-sinks' | 'only-both' | 'none';
 
 export interface Toast {
   id: string;
