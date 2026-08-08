@@ -39,7 +39,7 @@ export function getConnectedHighlights(
   }
 
   for (const edge of edges) {
-    const { id, sourceId, targetId } = edge;
+    const { id, sourceId, targetId, bidirectional } = edge;
     if (!sourceId || !targetId) continue;
 
     const sourceSelected = selectedIds.has(sourceId);
@@ -56,12 +56,22 @@ export function getConnectedHighlights(
       // An edge flows INTO a selected node → sourceId is an upstream source.
       sourceNodeIds.add(sourceId);
       connectedEdgeIds.add(id);
+      if (bidirectional) {
+        // Bidirectional edge also flows OUT OF the selected node → sourceId
+        // is simultaneously a downstream sink (B feeds into A as well).
+        sinkNodeIds.add(sourceId);
+      }
     }
 
     if (sourceSelected && !targetSelected) {
       // An edge flows OUT OF a selected node → targetId is a downstream sink.
       sinkNodeIds.add(targetId);
       connectedEdgeIds.add(id);
+      if (bidirectional) {
+        // Bidirectional edge also flows INTO the selected node → targetId
+        // is simultaneously an upstream source.
+        sourceNodeIds.add(targetId);
+      }
     }
   }
 

@@ -81,10 +81,13 @@ export function extractEdges(svgString: string): EdgeMeta[] {
   doc.querySelectorAll('path[data-edge-id]').forEach((p) => {
     const id = p.getAttribute('data-edge-id');
     if (!id) return;
+    // A bidirectional edge (e.g. A <--> B) has arrows on both ends.
+    const bidirectional = p.hasAttribute('marker-start') && p.hasAttribute('marker-end');
     edges.push({
       id,
       sourceId: p.getAttribute('data-edge-source'),
       targetId: p.getAttribute('data-edge-target'),
+      ...(bidirectional && { bidirectional: true }),
     });
   });
   return edges;

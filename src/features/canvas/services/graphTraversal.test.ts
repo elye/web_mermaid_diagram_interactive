@@ -8,6 +8,10 @@ function edge(id: string, sourceId: string | null, targetId: string | null): Edg
   return { id, sourceId, targetId };
 }
 
+function biEdge(id: string, sourceId: string, targetId: string): EdgeMeta {
+  return { id, sourceId, targetId, bidirectional: true };
+}
+
 function sel(...ids: string[]): ReadonlySet<string> {
   return new Set(ids);
 }
@@ -197,7 +201,9 @@ function applyMode(
     if (!e) continue;
     const { sourceId: src, targetId: tgt } = e;
     const isSourceEdge = src ? shownSources.has(src) : false;
-    const isSinkEdge   = tgt ? shownSinks.has(tgt)   : false;
+    // Mirror DiagramCanvas: for bidirectional edges check both ends against shownSinks.
+    const isSinkEdge   = (tgt ? shownSinks.has(tgt) : false)
+                      || (src ? shownSinks.has(src) : false);
     const isSelfLoop   = src != null && src === tgt && effectiveSelection.has(src);
     if (isSourceEdge || isSinkEdge || isSelfLoop) shownEdges.add(id);
   }
@@ -245,6 +251,53 @@ describe('ConnectivityMode filtering — A → B → C, selecting B', () => {
     expect(shownSources.size).toBe(0);
     expect(shownSinks.size).toBe(0);
     expect(shownEdges.size).toBe(0);
+  });
+});
+
+// ─── bidirectional edges (A <--> B) ─────────────────────────────────────────
+
+describe('getConnectedHighlights — bidirectional edge A <--> B', () => {
+  const edges = [biEdge('e1', 'A', 'B')];
+
+  it('selecting B: A is both source AND sink', () => {
+    const { sourceNodeIds, sinkNodeIds, connectedEdgeIds } = getConnectedHighlights(sel('B'), edges);
+    expect(sourceNodeIds.has('A')).toBe(true);  // A feeds into B
+    expect(sinkNodeIds.has('A')).toBe(true);    // B also feeds into A
+    expect(connectedEdgeIds.has('e1')).toBe(true);
+  });
+
+  it('selecting A: B is both source AND sink', () => {
+    const { sourceNodeIds, sinkNodeIds, connectedEdgeIds } = getConnectedHighlights(sel('A'), edges);
+    expect(sourceNodeIds.has('B')).toBe(true);
+    expect(sinkNodeIds.has('B')).toBe(true);
+    expect(connectedEdgeIds.has('e1')).toBe(true);
+  });
+});
+
+describe('ConnectivityMode filtering — bidirectional A <--> B, selecting B', () => {
+  const edges = [biEdge('e1', 'A', 'B')];
+  const edgesById = new Map(edges.map((e) => [e.id, e]));
+  const selection = sel('B');
+  const { sourceNodeIds, sinkNodeIds, connectedEdgeIds } = getConnectedHighlights(selection, edges);
+
+  it('mode=both: e1 shown', () => {
+    const { shownEdges } = applyMode('both', sourceNodeIds, sinkNodeIds, connectedEdgeIds, edgesById, selection);
+    expect(shownEdges.has('e1')).toBe(true);
+  });
+
+  it('mode=only-sources: e1 shown (A is a source)', () => {
+    const { shownEdges } = applyMode('only-sources', sourceNodeIds, sinkNodeIds, connectedEdgeIds, edgesById, selection);
+    expect(shownEdges.has('e1')).toBe(true);
+  });
+
+  it('mode=only-sinks: e1 shown (A is also a sink)', () => {
+    const { shownEdges } = applyMode('only-sinks', sourceNodeIds, sinkNodeIds, connectedEdgeIds, edgesById, selection);
+    expect(shownEdges.has('e1')).toBe(true);
+  });
+
+  it('mode=none: e1 hidden', () => {
+    const { shownEdges } = applyMode('none', sourceNodeIds, sinkNodeIds, connectedEdgeIds, edgesById, selection);
+    expect(shownEdges.has('e1')).toBe(false);
   });
 });
 

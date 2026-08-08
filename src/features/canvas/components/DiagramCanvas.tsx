@@ -424,8 +424,11 @@ export function DiagramCanvas() {
           const edgeTgt = p.getAttribute('data-edge-target');
           // source-side edge: flows from a source neighbour into the selection
           const isSourceEdge = edgeSrc ? shownSourceIds.has(edgeSrc) : false;
-          // sink-side edge: flows from the selection out to a sink neighbour
-          const isSinkEdge = edgeTgt ? shownSinkIds.has(edgeTgt) : false;
+          // sink-side edge: flows from the selection out to a sink neighbour.
+          // For bidirectional edges (A <--> B) with B selected, the sink is the
+          // edge's source end (A), so check both ends.
+          const isSinkEdge = (edgeTgt ? shownSinkIds.has(edgeTgt) : false)
+                          || (edgeSrc ? shownSinkIds.has(edgeSrc) : false);
           // self-loop: both ends on a selected node — always keep visible
           const isSelfLoop = edgeSrc != null && edgeSrc === edgeTgt && effectiveSelection.has(edgeSrc);
           if (isSourceEdge || isSinkEdge || isSelfLoop) {

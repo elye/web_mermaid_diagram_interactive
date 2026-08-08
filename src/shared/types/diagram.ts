@@ -24,6 +24,8 @@ export interface EdgeMeta {
   id: string;
   sourceId: string | null;
   targetId: string | null;
+  /** True when the edge has arrows on both ends (e.g. `A <--> B`). */
+  bidirectional?: boolean;
 }
 
 export interface PositionOverride {
