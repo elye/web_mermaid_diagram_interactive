@@ -33,6 +33,42 @@ function getOriginalMarkerId(markerId: string): string {
 }
 
 /**
+ * Given a marker path's `d` attribute, return the x-coordinate of the arrow tip.
+ *
+ * For marker-end arrows (e.g. `M 0 0 L 10 5 L 0 10 z`) the tip is at the
+ * MAX x-coordinate (rightmost lone vertex). For marker-start arrows (reversed,
+ * e.g. `M 0 5 L 10 10 L 10 0 z`) the tip is at the MIN x-coordinate.
+ *
+ * Detection strategy: parse all path vertices, then check whether the lone
+ * (unique) x-extreme is at min or max. If the minimum x appears on only one
+ * vertex while the maximum appears on two or more, the tip is at the min — it's
+ * a start-style (reversed) marker. Otherwise the tip is at the max.
+ */
+function getTipX(pathD: string): number {
+  // Extract all (x, y) pairs from M/L commands.
+  const vertices: number[] = [];
+  const re = /[ML]\s*([\d.]+)[,\s]+([\d.]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(pathD)) !== null) {
+    vertices.push(parseFloat(m[1]));
+  }
+  if (vertices.length === 0) return NaN;
+
+  const minX = Math.min(...vertices);
+  const maxX = Math.max(...vertices);
+
+  // Count how many vertices share the min vs max x.
+  const minCount = vertices.filter((x) => Math.abs(x - minX) < 0.01).length;
+  const maxCount = vertices.filter((x) => Math.abs(x - maxX) < 0.01).length;
+
+  // The tip is the lone extreme: unique x = the pointy end of the triangle.
+  // start-marker: tip at min-x (appears once), base at max-x (appears twice).
+  // end-marker:   tip at max-x (appears once), base at min-x (appears twice).
+  if (minCount < maxCount) return minX;
+  return maxX;
+}
+
+/**
  * Scale a marker by the given scale factor, creating a scaled clone if needed.
  * Returns the id of the (possibly new) scaled marker.
  *
@@ -63,15 +99,11 @@ export function scaleMarker(
       const pathElement = originalMarker.querySelector('path[d]');
       if (pathElement) {
         const pathD = pathElement.getAttribute('d') || '';
-        const xCoords = [];
-        const regex = /(?:^|\s|,)(\d+\.?\d*)/g;
-        let match;
-        while ((match = regex.exec(pathD)) !== null) {
-          xCoords.push(parseFloat(match[1]));
-        }
-        const tipX = Math.max(...xCoords);
+        const tipX = getTipX(pathD);
         if (isFinite(tipX)) {
-          // Attach at TIP_ATTACHMENT_RATIO of the tip position for better visual appearance
+          // Attach at TIP_ATTACHMENT_RATIO of the tip position for better visual appearance.
+          // For end-markers tip is at max-x so refX > 0;
+          // for start-markers tip is at min-x so refX is near 0 (line exits from the right).
           originalMarker.setAttribute('refX', String(tipX * TIP_ATTACHMENT_RATIO));
         }
       }
@@ -116,16 +148,7 @@ export function scaleMarker(
     const pathElement = originalMarker.querySelector('path[d]');
     if (pathElement) {
       const pathD = pathElement.getAttribute('d') || '';
-      // Find all x-coordinates in the path
-      const xCoords = [];
-      const regex = /(?:^|\s|,)(\d+\.?\d*)/g;
-      let match;
-      while ((match = regex.exec(pathD)) !== null) {
-        xCoords.push(parseFloat(match[1]));
-      }
-      
-      // The arrow tip is at the maximum x-coordinate in the path
-      const origTipX = Math.max(...xCoords);
+      const origTipX = getTipX(pathD);
       if (isFinite(origTipX)) {
         // After scaling, the tip will be at (origTipX * scaleFactor).
         // Attach at TIP_ATTACHMENT_RATIO of the tip position for better visual appearance.
