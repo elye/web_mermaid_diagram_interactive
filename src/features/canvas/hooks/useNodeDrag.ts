@@ -123,7 +123,10 @@ export function useNodeDrag(svgHostRef: React.RefObject<HTMLElement>) {
         anchorOverrides: new Map(Object.entries(edgeAnchorOverrides)),
       });
       // Resize subgraph cluster rectangles to keep wrapping their members.
-      resizeClusters(ctx.svg, useDiagramStore.getState().source);
+      // Pass collapsedClusters so collapsed child clusters are not overridden
+      // (their 120×40 rect is owned by useClusterCollapse).
+      const { source: nodeDragSource, collapsedClusters: nodeDragCC } = useDiagramStore.getState();
+      resizeClusters(ctx.svg, nodeDragSource, nodeDragCC);
       expandViewBoxToFit(ctx.svg);
     };
 

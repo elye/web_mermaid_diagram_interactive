@@ -41,10 +41,14 @@ export function extractClusterUserId(rawId: string): string | null {
   return m ? m[1] : rawId || null;
 }
 
-/** Collect the current bbox of every `g[data-node-id]` in `svg`, keyed by node id. */
+/** Collect the current bbox of every visible `g[data-node-id]` in `svg`, keyed by node id.
+ * Hidden nodes (display:none) are excluded — they belong to a collapsed cluster and
+ * should not influence parent cluster resizing.
+ */
 export function collectNodeBBoxes(svg: SVGSVGElement): Map<string, BBox> {
   const out = new Map<string, BBox>();
   svg.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
+    if (g.style.display === 'none') return; // hidden by cluster collapse
     const id = g.getAttribute('data-node-id');
     if (!id) return;
     const bbox = groupBBox(g);

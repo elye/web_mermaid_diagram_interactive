@@ -30,6 +30,16 @@ export interface DiagramState {
    * Allows the user to pin arrow attachment points to a specific side of the node.
    */
   edgeAnchorOverrides: Record<string, { source?: EdgeAnchorOverride; target?: EdgeAnchorOverride }>;
+  /**
+   * Ids of subgraph clusters currently rendered in collapsed form.
+   *
+   * Collapse is a **view-state** toggle (like selection or zoom) — it does
+   * NOT change the semantic graph (nodes / edges / membership) and is
+   * intentionally excluded from undo/redo and file persistence. The rendered
+   * effect is projected from this set by `useClusterCollapse` and the pure
+   * `computeCollapseState` service.
+   */
+  collapsedClusters: Set<string>;
   renderError: string | null;
 
   setSource: (src: string) => void;
@@ -41,6 +51,12 @@ export interface DiagramState {
   clearEdgeWaypoints: (edgeId?: string) => void;
   setEdgeAnchorOverride: (edgeId: string, role: 'source' | 'target', override: EdgeAnchorOverride | null) => void;
   clearEdgeAnchorOverrides: (edgeId?: string) => void;
+  /** Toggle a cluster's collapse state (view-only; not tracked by history). */
+  toggleClusterCollapse: (clusterId: string) => void;
+  /** Explicitly set (or clear) a cluster's collapse state. */
+  setClusterCollapsed: (clusterId: string, collapsed: boolean) => void;
+  /** Expand every currently-collapsed cluster. */
+  expandAllClusters: () => void;
   deleteNodes: (ids: string[]) => void;
   hydrate: (patch: Partial<DiagramState>) => void;
 }
@@ -53,9 +69,18 @@ export const useDiagramStore = create<DiagramState>((set) => ({
   positionOverrides: {},
   edgeWaypoints: {},
   edgeAnchorOverrides: {},
+  collapsedClusters: new Set<string>(),
   renderError: null,
 
-  setSource: (src) => set({ source: src, renderError: null }),
+  setSource: (src) =>
+    set((s) => ({
+      source: src,
+      renderError: null,
+      // Collapse state references cluster ids that may not exist in the new
+      // source — clear it so we never carry stale ids across an edit. The
+      // user can re-collapse after the new render lands.
+      collapsedClusters: s.collapsedClusters.size === 0 ? s.collapsedClusters : new Set<string>(),
+    })),
   setRendered: ({ svg, nodes, edges }) => set({ svg, nodes, edges, renderError: null }),
   setRenderError: (err) => set({ renderError: err }),
   setPositionOverride: (id, p) =>
@@ -92,6 +117,24 @@ export const useDiagramStore = create<DiagramState>((set) => ({
       delete next[edgeId];
       return { edgeAnchorOverrides: next };
     }),
+  toggleClusterCollapse: (clusterId) =>
+    set((s) => {
+      const next = new Set(s.collapsedClusters);
+      if (next.has(clusterId)) next.delete(clusterId);
+      else next.add(clusterId);
+      return { collapsedClusters: next };
+    }),
+  setClusterCollapsed: (clusterId, collapsed) =>
+    set((s) => {
+      const alreadyCollapsed = s.collapsedClusters.has(clusterId);
+      if (alreadyCollapsed === collapsed) return {};
+      const next = new Set(s.collapsedClusters);
+      if (collapsed) next.add(clusterId);
+      else next.delete(clusterId);
+      return { collapsedClusters: next };
+    }),
+  expandAllClusters: () =>
+    set((s) => (s.collapsedClusters.size === 0 ? {} : { collapsedClusters: new Set<string>() })),
   deleteNodes: (ids) =>
     set((s) => ({
       source: removeNodesFromSource(s.source, ids),
