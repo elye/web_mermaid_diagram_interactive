@@ -196,6 +196,147 @@ describe('markerScaling', () => {
     });
   });
 
+  describe('circle markers (o--o)', () => {
+    let circleEndMarker: SVGMarkerElement;
+    let circleStartMarker: SVGMarkerElement;
+
+    beforeEach(() => {
+      // Mermaid flowchart-circleEnd: viewBox="0 0 10 10", cx=5, cy=5, r=5, refX=11, markerWidth=11
+      circleEndMarker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+      circleEndMarker.id = 'test-circleEnd';
+      circleEndMarker.setAttribute('markerWidth', '11');
+      circleEndMarker.setAttribute('markerHeight', '11');
+      circleEndMarker.setAttribute('refX', '11');
+      circleEndMarker.setAttribute('refY', '5');
+      circleEndMarker.setAttribute('viewBox', '0 0 10 10');
+      circleEndMarker.setAttribute('markerUnits', 'userSpaceOnUse');
+      const circleEl = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      circleEl.setAttribute('cx', '5');
+      circleEl.setAttribute('cy', '5');
+      circleEl.setAttribute('r', '5');
+      circleEndMarker.appendChild(circleEl);
+      defs.appendChild(circleEndMarker);
+
+      // Mermaid flowchart-circleStart: refX=-1 (left edge)
+      circleStartMarker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+      circleStartMarker.id = 'test-circleStart';
+      circleStartMarker.setAttribute('markerWidth', '11');
+      circleStartMarker.setAttribute('markerHeight', '11');
+      circleStartMarker.setAttribute('refX', '-1');
+      circleStartMarker.setAttribute('refY', '5');
+      circleStartMarker.setAttribute('viewBox', '0 0 10 10');
+      circleStartMarker.setAttribute('markerUnits', 'userSpaceOnUse');
+      const circleEl2 = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      circleEl2.setAttribute('cx', '5');
+      circleEl2.setAttribute('cy', '5');
+      circleEl2.setAttribute('r', '5');
+      circleStartMarker.appendChild(circleEl2);
+      defs.appendChild(circleStartMarker);
+    });
+
+    it('should fix circleEnd refX to right edge (cx+r=10) at scale 1', () => {
+      scaleMarker(circleEndMarker, 1.0, svg);
+      // cx=5, r=5, right edge = 10
+      expect(parseFloat(circleEndMarker.getAttribute('refX')!)).toBe(10);
+    });
+
+    it('should fix circleStart refX to left edge (cx-r=0) at scale 1', () => {
+      scaleMarker(circleStartMarker, 1.0, svg);
+      // cx=5, r=5, left edge = 0
+      expect(parseFloat(circleStartMarker.getAttribute('refX')!)).toBe(0);
+    });
+
+    it('should scale circle cx, cy, r when creating a scaled clone', () => {
+      const scaledId = scaleMarker(circleEndMarker, 2.0, svg);
+      const scaledMarker = document.getElementById(scaledId)!;
+      const circle = scaledMarker.querySelector('circle')!;
+      // Original: cx=5, cy=5, r=5 → scaled 2x: cx=10, cy=10, r=10
+      expect(parseFloat(circle.getAttribute('cx')!)).toBe(10);
+      expect(parseFloat(circle.getAttribute('cy')!)).toBe(10);
+      expect(parseFloat(circle.getAttribute('r')!)).toBe(10);
+    });
+
+    it('should set circleEnd refX to right edge scaled (cx+r)*scale = 20 at scale 2', () => {
+      const scaledId = scaleMarker(circleEndMarker, 2.0, svg);
+      const scaledMarker = document.getElementById(scaledId)!;
+      // cx=5, r=5, right edge in original=10, scaled 2x = 20
+      expect(parseFloat(scaledMarker.getAttribute('refX')!)).toBe(20);
+    });
+
+    it('should set circleStart refX to 0 at scale 2', () => {
+      const scaledId = scaleMarker(circleStartMarker, 2.0, svg);
+      const scaledMarker = document.getElementById(scaledId)!;
+      // cx=5, r=5, left edge = 0, scaled 2x = 0
+      expect(parseFloat(scaledMarker.getAttribute('refX')!)).toBe(0);
+    });
+
+    it('should scale markerWidth/Height proportionally', () => {
+      const scaledId = scaleMarker(circleEndMarker, 1.5, svg);
+      const scaledMarker = document.getElementById(scaledId)!;
+      expect(parseFloat(scaledMarker.getAttribute('markerWidth')!)).toBe(16.5);
+      expect(parseFloat(scaledMarker.getAttribute('markerHeight')!)).toBe(16.5);
+    });
+  });
+
+  describe('cross markers (x--x)', () => {
+    let crossEndMarker: SVGMarkerElement;
+    let crossStartMarker: SVGMarkerElement;
+
+    beforeEach(() => {
+      // Mermaid flowchart-crossEnd: viewBox="0 0 11 11", refX=8.5, path "M 1,1 l 9,9 M 10,1 l -9,9"
+      const makeCross = (id: string) => {
+        const m = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+        m.id = id;
+        m.setAttribute('markerWidth', '11');
+        m.setAttribute('markerHeight', '11');
+        m.setAttribute('refX', '8.5');
+        m.setAttribute('refY', '5.2');
+        m.setAttribute('viewBox', '0 0 11 11');
+        m.setAttribute('markerUnits', 'userSpaceOnUse');
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', 'M 1,1 l 9,9 M 10,1 l -9,9');
+        m.appendChild(path);
+        defs.appendChild(m);
+        return m;
+      };
+      crossEndMarker   = makeCross('test-crossEnd');
+      crossStartMarker = makeCross('test-crossStart');
+    });
+
+    it('should fix crossEnd refX to center (5.5) at scale 1', () => {
+      scaleMarker(crossEndMarker, 1.0, svg);
+      // M-vertices x: [1, 10], center = (1+10)/2 = 5.5
+      expect(parseFloat(crossEndMarker.getAttribute('refX')!)).toBe(5.5);
+    });
+
+    it('should fix crossStart refX to center (5.5) at scale 1', () => {
+      scaleMarker(crossStartMarker, 1.0, svg);
+      expect(parseFloat(crossStartMarker.getAttribute('refX')!)).toBe(5.5);
+    });
+
+    it('should set cross refX to center * scale at scale 2', () => {
+      const scaledId = scaleMarker(crossEndMarker, 2.0, svg);
+      const scaledMarker = document.getElementById(scaledId)!;
+      // center=5.5, scaled 2x = 11
+      expect(parseFloat(scaledMarker.getAttribute('refX')!)).toBe(11);
+    });
+
+    it('should scale cross path coordinates', () => {
+      const scaledId = scaleMarker(crossEndMarker, 2.0, svg);
+      const scaledMarker = document.getElementById(scaledId)!;
+      const path = scaledMarker.querySelector('path[d]')!;
+      // Original: M 1,1 l 9,9 M 10,1 l -9,9 → scaled 2x: M 2,2 l 18,18 M 20,2 l -18,18
+      expect(path.getAttribute('d')).toBe('M 2,2 l 18,18 M 20,2 l -18,18');
+    });
+
+    it('should scale cross markerWidth/Height proportionally', () => {
+      const scaledId = scaleMarker(crossEndMarker, 2.0, svg);
+      const scaledMarker = document.getElementById(scaledId)!;
+      expect(parseFloat(scaledMarker.getAttribute('markerWidth')!)).toBe(22);
+      expect(parseFloat(scaledMarker.getAttribute('markerHeight')!)).toBe(22);
+    });
+  });
+
   describe('TIP_ATTACHMENT_RATIO consistency', () => {
     it('should use consistent 85% attachment ratio for all scales', () => {
       const scales = [0.5, 0.75, 1.0, 1.5, 2.0, 2.5];

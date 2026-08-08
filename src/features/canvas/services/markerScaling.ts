@@ -39,13 +39,16 @@ function getOriginalMarkerId(markerId: string): string {
  * MAX x-coordinate (rightmost lone vertex). For marker-start arrows (reversed,
  * e.g. `M 0 5 L 10 10 L 10 0 z`) the tip is at the MIN x-coordinate.
  *
- * Detection strategy: parse all path vertices, then check whether the lone
- * (unique) x-extreme is at min or max. If the minimum x appears on only one
- * vertex while the maximum appears on two or more, the tip is at the min — it's
- * a start-style (reversed) marker. Otherwise the tip is at the max.
+ * For symmetric markers (e.g. a cross `x`) where both extremes appear the same
+ * number of times, there is no single tip — returns NaN to signal that the
+ * caller should use center-based positioning instead.
+ *
+ * Detection strategy: parse all absolute M/L vertices, then check whether the
+ * lone (unique) x-extreme is at min or max. If minCount === maxCount the
+ * shape is symmetric and NaN is returned.
  */
 function getTipX(pathD: string): number {
-  // Extract all (x, y) pairs from M/L commands.
+  // Extract all (x, y) pairs from absolute M/L commands only.
   const vertices: number[] = [];
   const re = /[ML]\s*([\d.]+)[,\s]+([\d.]+)/g;
   let m: RegExpExecArray | null;
@@ -61,11 +64,75 @@ function getTipX(pathD: string): number {
   const minCount = vertices.filter((x) => Math.abs(x - minX) < 0.01).length;
   const maxCount = vertices.filter((x) => Math.abs(x - maxX) < 0.01).length;
 
+  // Symmetric marker (e.g. cross): both extremes appear equally — no single tip.
+  if (minCount === maxCount) return NaN;
+
   // The tip is the lone extreme: unique x = the pointy end of the triangle.
   // start-marker: tip at min-x (appears once), base at max-x (appears twice).
   // end-marker:   tip at max-x (appears once), base at min-x (appears twice).
   if (minCount < maxCount) return minX;
   return maxX;
+}
+
+/**
+ * Return the x range [minX, maxX] of the absolute M/L vertices in a path.
+ * Returns null if no vertices are found.
+ */
+function getPathXRange(pathD: string): { minX: number; maxX: number } | null {
+  const vertices: number[] = [];
+  const re = /[ML]\s*([\d.]+)[,\s]+([\d.]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(pathD)) !== null) {
+    vertices.push(parseFloat(m[1]));
+  }
+  if (vertices.length === 0) return null;
+  return { minX: Math.min(...vertices), maxX: Math.max(...vertices) };
+}
+
+/**
+ * Compute the refX attachment point for a marker given its original geometry
+ * (with viewBox still present). Returns { refX, isSymmetric }.
+ *
+ * - Arrow markers (triangles): refX at TIP_ATTACHMENT_RATIO of the tip.
+ * - Circle markers (o): refX at the tangent edge (cx ± r).
+ * - Symmetric markers (cross x): refX at the horizontal center.
+ *
+ * All coordinates are in the marker's ORIGINAL viewBox/path user space.
+ */
+function computeOrigRefX(marker: SVGMarkerElement): number | null {
+  // Circle marker (o--o)?
+  const circle = marker.querySelector('circle');
+  if (circle) {
+    const cx = parseFloat(circle.getAttribute('cx') || '5');
+    const r  = parseFloat(circle.getAttribute('r')  || '5');
+    // For end-markers the line attaches at the right edge; for start-markers at
+    // the left edge. We detect by checking whether the original refX is closer
+    // to cx+r or cx-r.
+    const origRefX = parseFloat(marker.getAttribute('refX') || '0');
+    const rightEdge = cx + r;
+    const leftEdge  = cx - r;
+    const useRight  = Math.abs(origRefX - rightEdge) <= Math.abs(origRefX - leftEdge);
+    return useRight ? rightEdge : leftEdge;
+  }
+
+  // Path-based marker?
+  const pathEl = marker.querySelector('path[d]');
+  if (!pathEl) return null;
+  const pathD = pathEl.getAttribute('d') || '';
+
+  const tipX = getTipX(pathD);
+  if (isFinite(tipX)) {
+    // Arrow-style marker — attach slightly before the tip.
+    return tipX * TIP_ATTACHMENT_RATIO;
+  }
+
+  // Symmetric marker (cross) — attach at horizontal center.
+  const range = getPathXRange(pathD);
+  if (range) {
+    return (range.minX + range.maxX) / 2;
+  }
+
+  return null;
 }
 
 /**
@@ -96,16 +163,11 @@ export function scaleMarker(
   if (Math.abs(scaleFactor - 1) < 0.01) {
     // Fix the original marker's refX if not already fixed
     if (!originalMarker.hasAttribute('data-refx-fixed')) {
-      const pathElement = originalMarker.querySelector('path[d]');
-      if (pathElement) {
-        const pathD = pathElement.getAttribute('d') || '';
-        const tipX = getTipX(pathD);
-        if (isFinite(tipX)) {
-          // Attach at TIP_ATTACHMENT_RATIO of the tip position for better visual appearance.
-          // For end-markers tip is at max-x so refX > 0;
-          // for start-markers tip is at min-x so refX is near 0 (line exits from the right).
-          originalMarker.setAttribute('refX', String(tipX * TIP_ATTACHMENT_RATIO));
-        }
+      const origRefX = computeOrigRefX(originalMarker);
+      if (origRefX !== null) {
+        // Attach at the computed position (already includes TIP_ATTACHMENT_RATIO for arrows,
+        // or uses edge/center for circles/crosses).
+        originalMarker.setAttribute('refX', String(origRefX));
       }
       originalMarker.setAttribute('data-refx-fixed', 'true');
     }
@@ -135,26 +197,14 @@ export function scaleMarker(
     // For userSpaceOnUse markers, removing the viewBox prevents conflicting scaling.
     scaledMarker.removeAttribute('viewBox');
     
-    // For refX: Find the arrow tip and maintain consistent visual positioning across all scales.
-    // Original Mermaid marker: viewBox="0 0 10 10", markerWidth=12, path tip at x=10, refX=6
-    // When we remove the viewBox (working in pure user space), we need refX to attach near the tip.
-    //
-    // For visual consistency: attach slightly before the tip (at TIP_ATTACHMENT_RATIO of tip position).
-    // This ensures the line goes through the arrow body rather than just touching the point,
-    // which looks better especially at larger scales (4px+).
-    
-    let refXTarget = origRefX * scaleFactor; // Default fallback
-    
-    const pathElement = originalMarker.querySelector('path[d]');
-    if (pathElement) {
-      const pathD = pathElement.getAttribute('d') || '';
-      const origTipX = getTipX(pathD);
-      if (isFinite(origTipX)) {
-        // After scaling, the tip will be at (origTipX * scaleFactor).
-        // Attach at TIP_ATTACHMENT_RATIO of the tip position for better visual appearance.
-        refXTarget = origTipX * scaleFactor * TIP_ATTACHMENT_RATIO;
-      }
-    }
+    // For refX: compute from the original marker's geometry (arrow tip, circle edge,
+    // or symmetric center) and scale proportionally.
+    const origRefXComputed = computeOrigRefX(originalMarker);
+    // origRefXComputed is in the ORIGINAL marker's path/viewBox user space.
+    // After scaling the geometry by scaleFactor, multiply it by scaleFactor too.
+    const refXTarget = origRefXComputed !== null
+      ? origRefXComputed * scaleFactor
+      : origRefX * scaleFactor; // Ultimate fallback: scale the raw attribute value
     
     scaledMarker.setAttribute('refX', String(refXTarget));
     
@@ -181,11 +231,16 @@ export function scaleMarker(
       path.setAttribute('stroke-width', String(origStrokeWidth));
     });
 
-    // Scale circle radius if present, from original (now it's in user space)
-    scaledMarker.querySelectorAll('circle[r]').forEach((circle) => {
-      const origCircle = originalMarker.querySelector('circle[r]');
-      const origRadius = parseFloat(origCircle?.getAttribute('r') || circle.getAttribute('r') || '5');
-      circle.setAttribute('r', String(origRadius * scaleFactor));
+    // Scale circle geometry (cx, cy, r) proportionally, from original values.
+    scaledMarker.querySelectorAll('circle').forEach((circle, idx) => {
+      const origCircles = originalMarker.querySelectorAll('circle');
+      const origCircle = origCircles[idx] ?? origCircles[0];
+      const origCx = parseFloat(origCircle?.getAttribute('cx') || circle.getAttribute('cx') || '5');
+      const origCy = parseFloat(origCircle?.getAttribute('cy') || circle.getAttribute('cy') || '5');
+      const origR  = parseFloat(origCircle?.getAttribute('r')  || circle.getAttribute('r')  || '5');
+      circle.setAttribute('cx', String(origCx * scaleFactor));
+      circle.setAttribute('cy', String(origCy * scaleFactor));
+      circle.setAttribute('r',  String(origR  * scaleFactor));
     });
 
     // Insert the scaled marker right after the original.
