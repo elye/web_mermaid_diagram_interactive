@@ -126,3 +126,41 @@ g.cluster:hover > rect {
     drop-shadow(0 0 1.5px var(--mf-accent))
     drop-shadow(0 0 4px var(--mf-accent));
 }
+
+/* ── Source / sink connectivity highlights ────────────────────────────────── */
+
+/* Source node: upstream neighbor feeding into the selection.
+   Warm amber glow to suggest "input / origin". */
+.mf-node--source {
+  filter:
+    drop-shadow(0 0 1.5px #f59e0b)
+    drop-shadow(0 0 5px rgba(245, 158, 11, 0.55));
+  opacity: 1;
+}
+
+/* Sink node: downstream neighbor receiving from the selection.
+   Cool violet glow to suggest "output / destination". */
+.mf-node--sink {
+  filter:
+    drop-shadow(0 0 1.5px #a78bfa)
+    drop-shadow(0 0 5px rgba(167, 139, 250, 0.55));
+  opacity: 1;
+}
+
+/* Dim all other (unrelated) nodes when a selection is active. */
+.mf-canvas--has-selection g[data-node-id]:not(.mf-node--selected):not(.mf-node--source):not(.mf-node--sink) {
+  opacity: 0.35;
+  transition: opacity 150ms ease;
+}
+
+/* Connecting edge: the edge linking a selected node to a source/sink. */
+.mf-edge--connected {
+  opacity: 1 !important;
+  filter: drop-shadow(0 0 2px var(--mf-accent));
+}
+
+/* Dim unrelated edges when a selection is active. */
+.mf-canvas--has-selection path[data-edge-id]:not(.mf-edge--selected):not(.mf-edge--connected) {
+  opacity: 0.2;
+  transition: opacity 150ms ease;
+}
