@@ -9,7 +9,7 @@ const CONNECTIVITY_OPTIONS: { value: ConnectivityMode; label: string; title: str
   { value: 'both',         label: '⇄',  title: 'Highlight sources & sinks' },
   { value: 'only-sources', label: '←',  title: 'Highlight sources only (upstream)' },
   { value: 'only-sinks',   label: '→',  title: 'Highlight sinks only (downstream)' },
-  { value: 'only-both',    label: '<-->',  title: 'Highlight bidirectional connections only' },
+  { value: 'only-both',    label: '↔',  title: 'Highlight bidirectional connections only' },
   { value: 'none',         label: '○',  title: 'No connectivity highlighting' },
 ];
 
