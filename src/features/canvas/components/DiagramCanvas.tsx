@@ -426,7 +426,9 @@ export function DiagramCanvas() {
           const isSourceEdge = edgeSrc ? shownSourceIds.has(edgeSrc) : false;
           // sink-side edge: flows from the selection out to a sink neighbour
           const isSinkEdge = edgeTgt ? shownSinkIds.has(edgeTgt) : false;
-          if (isSourceEdge || isSinkEdge) {
+          // self-loop: both ends on a selected node — always keep visible
+          const isSelfLoop = edgeSrc != null && edgeSrc === edgeTgt && effectiveSelection.has(edgeSrc);
+          if (isSourceEdge || isSinkEdge || isSelfLoop) {
             p.classList.add('mf-edge--connected');
           }
         });
