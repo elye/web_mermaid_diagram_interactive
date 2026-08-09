@@ -127,7 +127,9 @@ export function useClusterDrag(
         // cluster's own rect (which we're dragging) but DOES refit any parent
         // cluster box around the moved collapsed child.
         const { x: ox, y: oy } = ctx.clusterOriginalPos;
-        ctx.clusterGroup.setAttribute('transform', `translate(${ox + dx}, ${oy + dy})`);
+        const draggedX = ox + dx;
+        const draggedY = oy + dy;
+        ctx.clusterGroup.setAttribute('transform', `translate(${draggedX}, ${draggedY})`);
         // Reroute normal (non-bundle) edges and rebuild bundle overlays.
         routeAllEdges(svg, {
           lineStyles,
@@ -136,7 +138,11 @@ export function useClusterDrag(
         });
         rebuildBundleOverlays(svg);
         // Refit parent cluster boxes around the moved collapsed child.
+        // resizeClusters may overwrite the collapsed cluster's own translate
+        // (via collapsedClusterCenter) with its pre-drag member-node center —
+        // so re-apply the dragged transform immediately after to restore it.
         resizeClusters(svg, source, collapsedClusters);
+        ctx.clusterGroup.setAttribute('transform', `translate(${draggedX}, ${draggedY})`);
       } else {
         routeAllEdges(svg, {
           lineStyles,

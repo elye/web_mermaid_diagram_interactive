@@ -160,7 +160,13 @@ export const useDiagramStore = create<DiagramState>((set) => ({
         next.add(clusterId);
         for (const id of nested) next.add(id);
       }
-      return { collapsedClusters: next };
+      // Clear bundle edgeWaypoints for this cluster — they become stale when
+      // the collapse state changes (new bundles may appear or disappear).
+      const nextEdgeWaypoints: Record<string, EdgeWaypoint[]> = {};
+      for (const [k, v] of Object.entries(s.edgeWaypoints)) {
+        if (!k.startsWith(`${clusterId}::`)) nextEdgeWaypoints[k] = v;
+      }
+      return { collapsedClusters: next, edgeWaypoints: nextEdgeWaypoints };
     }),
   setClusterCollapsed: (clusterId, collapsed) =>
     set((s) => {

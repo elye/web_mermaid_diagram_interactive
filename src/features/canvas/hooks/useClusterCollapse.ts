@@ -13,13 +13,24 @@
 
 import { useEffect } from 'react';
 import { useDiagramStore } from '@/stores/diagramStore';
+import { useSelectionStore } from '@/stores/selectionStore';
 import { parseSubgraphMembership } from '../services/cluster/subgraphParser';
 import { collectClusterElements, clusterElementBBox } from '../services/cluster/clusterElements';
 import { computeCollapseState, bundleLabel } from '../services/collapseUtils';
 import { resizeClusters } from '../services/clusterResize';
-import { cssEscape } from '../services/svg';
-import { anchorOn, bezierPath, outwardNormal, centerOf } from '../services/routing';
+import { cssEscape, groupBBox } from '../services/svg';
+import { anchorOn, anchorOnSide, bezierPath, outwardNormal, centerOf } from '../services/routing';
+import { waypointBezierPath } from '../services/routing/bezierChain';
 import type { BBox } from '@/shared/types/diagram';
+
+/** Stable edge-id key for a bundle edge — shared with diagramStore. */
+export function bundleEdgeId(
+  clusterId: string,
+  externalNodeId: string,
+  direction: string,
+): string {
+  return `${clusterId}::${externalNodeId}::${direction}`;
+}
 
 export const SVG_NS = 'http://www.w3.org/2000/svg';
 export const BUNDLE_ATTR = 'data-mf-bundle';
@@ -35,6 +46,8 @@ export function useClusterCollapse(
   const collapsedClusters = useDiagramStore((s) => s.collapsedClusters);
   const toggleClusterCollapse = useDiagramStore((s) => s.toggleClusterCollapse);
   const edges = useDiagramStore((s) => s.edges);
+  const edgeWaypoints = useDiagramStore((s) => s.edgeWaypoints);
+  const edgeAnchorOverrides = useDiagramStore((s) => s.edgeAnchorOverrides);
 
   useEffect(() => {
     const host = svgHostRef.current;
@@ -266,12 +279,14 @@ export function useClusterCollapse(
     if (bundledEdges.length === 0) return;
 
     // Collect visible external node bboxes in SVG root space.
+    // Use groupBBox (shape-only, same as routeAllEdges) so anchors match
+    // the regular routing system's anchor points exactly.
     const extNodeBBoxes = new Map<string, BBox>();
     svgEl.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
       if (g.style.display === 'none') return;
       const id = g.getAttribute('data-node-id');
       if (!id) return;
-      const bbox = getNodeBBoxInSVGSpace(g, svgEl);
+      const bbox = groupBBox(g);
       if (bbox) extNodeBBoxes.set(id, bbox);
     });
 
@@ -305,10 +320,18 @@ export function useClusterCollapse(
         srcBox = clusterBBox;
         tgtBox = extBBox;
       }
+      // Compute bundle edge id so we can look up any user anchor overrides.
+      const bId = bundleEdgeId(bundle.clusterId, bundle.externalNodeId, bundle.direction);
+      const anchorOverride = edgeAnchorOverrides[bId];
+
       const srcFacing = centerOf(tgtBox);
       const tgtFacing = centerOf(srcBox);
-      const srcAnchor = anchorOn(srcBox, srcFacing);
-      const tgtAnchor = anchorOn(tgtBox, tgtFacing);
+      const srcAnchor = anchorOverride?.source
+        ? anchorOnSide(srcBox, anchorOverride.source as never)
+        : anchorOn(srcBox, srcFacing);
+      const tgtAnchor = anchorOverride?.target
+        ? anchorOnSide(tgtBox, anchorOverride.target as never)
+        : anchorOn(tgtBox, tgtFacing);
       // Outward normals so the curve exits each box perpendicularly —
       // the same as routeSingleEdge in routeEdges.ts.
       const srcTangent = outwardNormal(srcBox, srcAnchor);
@@ -327,16 +350,32 @@ export function useClusterCollapse(
         ? { x: srcAnchor.x + srcTangent.x * tipOvershoot,
             y: srcAnchor.y + srcTangent.y * tipOvershoot }
         : srcAnchor;
-
-      const d = bezierPath(srcPulled, tgtPulled, srcTangent, tgtTangent);
+      const storedWaypoints = edgeWaypoints[bId];
+      const wp = storedWaypoints?.[0];
+      // waypointBezierPath requires BBox placeholders (unused by the algorithm)
+      const zeroBBox: BBox = { x: 0, y: 0, width: 0, height: 0 };
+      const d = wp
+        ? waypointBezierPath(srcPulled, [wp], tgtPulled, zeroBBox, zeroBBox, srcTangent, tgtTangent)
+        : bezierPath(srcPulled, tgtPulled, srcTangent, tgtTangent);
 
       const path = document.createElementNS(SVG_NS, 'path');
       path.setAttribute('d', d);
       path.setAttribute('class', `mf-bundle-edge mf-bundle-edge--${bundle.direction}`);
+      path.setAttribute('data-edge-id', bId);
       path.setAttribute('data-mf-bundle-cluster', bundle.clusterId);
       path.setAttribute('data-mf-bundle-external', bundle.externalNodeId);
       path.setAttribute('data-mf-bundle-direction', bundle.direction);
       path.setAttribute('data-mf-bundle-count', String(bundle.count));
+      // Store source/target anchor points and tangents so applyBundleWaypointLive
+      // can reconstruct the exact same curve shape during interactive waypoint drag.
+      path.setAttribute('data-mf-src-x', String(srcPulled.x));
+      path.setAttribute('data-mf-src-y', String(srcPulled.y));
+      path.setAttribute('data-mf-tgt-x', String(tgtPulled.x));
+      path.setAttribute('data-mf-tgt-y', String(tgtPulled.y));
+      path.setAttribute('data-mf-src-tx', String(srcTangent.x));
+      path.setAttribute('data-mf-src-ty', String(srcTangent.y));
+      path.setAttribute('data-mf-tgt-tx', String(tgtTangent.x));
+      path.setAttribute('data-mf-tgt-ty', String(tgtTangent.y));
 
       if (markerEndId) {
         path.setAttribute('marker-end', `url(#${markerEndId})`);
@@ -344,17 +383,25 @@ export function useClusterCollapse(
       if (bundle.direction === 'bidir' && markerStartId) {
         path.setAttribute('marker-start', `url(#${markerStartId})`);
       }
+      // Wide invisible hit path — same technique as .mf-edge-hit on regular
+      // edges. pointer-events:stroke on a thin dashed line is nearly
+      // impossible to click, so we lay a transparent 12px stroke on top.
+      const hit = document.createElementNS(SVG_NS, 'path');
+      hit.setAttribute('d', d);
+      hit.setAttribute('class', 'mf-edge-hit');
+      hit.setAttribute('data-hit-edge-id', bId);
+      overlayGroup.appendChild(hit);
+
       overlayGroup.appendChild(path);
 
       const label = bundleLabel(bundle.count);
       if (label) {
         // Use the bezier midpoint (t=0.5) rather than the straight anchor
         // average, so the label sits on the curve regardless of its shape.
-        const midX = bezierMidpoint(srcAnchor, tgtAnchor, srcTangent, tgtTangent).x;
-        const midY = bezierMidpoint(srcAnchor, tgtAnchor, srcTangent, tgtTangent).y;
+        const mid = wp ?? bezierMidpoint(srcAnchor, tgtAnchor, srcTangent, tgtTangent);
         const text = document.createElementNS(SVG_NS, 'text');
-        text.setAttribute('x', String(midX));
-        text.setAttribute('y', String(midY - 6));
+        text.setAttribute('x', String(mid.x));
+        text.setAttribute('y', String(mid.y - 6));
         text.setAttribute('class', 'mf-bundle-label');
         text.setAttribute('text-anchor', 'middle');
         text.setAttribute('pointer-events', 'none');
@@ -364,7 +411,18 @@ export function useClusterCollapse(
     }
 
     svgEl.appendChild(overlayGroup);
-  }, [svg, source, collapsedClusters, edges, toggleClusterCollapse, svgHostRef]);
+
+    // Re-apply the selection class to any bundle paths that are currently
+    // selected. This is needed because this effect re-runs when edgeWaypoints
+    // changes (e.g. after a waypoint drag), which recreates the overlay paths
+    // without the class — but DiagramCanvas's selection effect won't re-run
+    // (selectedEdgeIds hasn't changed) so we must restore it here.
+    const { selectedEdgeIds } = useSelectionStore.getState();
+    selectedEdgeIds.forEach((id) => {
+      const p = svgEl.querySelector<SVGPathElement>(`path[data-edge-id="${id}"][data-mf-bundle-cluster]`);
+      p?.classList.add('mf-edge--selected');
+    });
+  }, [svg, source, collapsedClusters, edges, toggleClusterCollapse, edgeWaypoints, edgeAnchorOverrides, svgHostRef]);
 }
 
 /**
@@ -397,13 +455,13 @@ export function rebuildBundleOverlays(svgEl: SVGSVGElement): void {
     if (bbox) collapsedBBoxes.set(clusterId, bbox);
   }
 
-  // Collect visible external node bboxes.
+  // Collect visible external node bboxes (shape-only, same as routeAllEdges).
   const extNodeBBoxes = new Map<string, BBox>();
   svgEl.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
     if (g.style.display === 'none') return;
     const id = g.getAttribute('data-node-id');
     if (!id) return;
-    const bbox = getNodeBBoxInSVGSpace(g, svgEl);
+    const bbox = groupBBox(g);
     if (bbox) extNodeBBoxes.set(id, bbox);
   });
 
@@ -429,8 +487,17 @@ export function rebuildBundleOverlays(svgEl: SVGSVGElement): void {
       srcBox = clusterBBox;
       tgtBox = extBBox;
     }
-    const srcAnchor = anchorOn(srcBox, centerOf(tgtBox));
-    const tgtAnchor = anchorOn(tgtBox, centerOf(srcBox));
+    // Compute edge id early so we can look up any user anchor/waypoint overrides.
+    const bId = bundleEdgeId(bundle.clusterId, bundle.externalNodeId, bundle.direction);
+    const { edgeWaypoints: ewp, edgeAnchorOverrides: eao } = useDiagramStore.getState();
+    const bundleAnchorOverride = eao[bId];
+
+    const srcAnchor = bundleAnchorOverride?.source
+      ? anchorOnSide(srcBox, bundleAnchorOverride.source as never)
+      : anchorOn(srcBox, centerOf(tgtBox));
+    const tgtAnchor = bundleAnchorOverride?.target
+      ? anchorOnSide(tgtBox, bundleAnchorOverride.target as never)
+      : anchorOn(tgtBox, centerOf(srcBox));
     const srcTangent = outwardNormal(srcBox, srcAnchor);
     const tgtTangent = outwardNormal(tgtBox, tgtAnchor);
 
@@ -443,21 +510,42 @@ export function rebuildBundleOverlays(svgEl: SVGSVGElement): void {
           y: srcAnchor.y + srcTangent.y * tipOvershoot }
       : srcAnchor;
 
-    const d = bezierPath(srcPulled, tgtPulled, srcTangent, tgtTangent);
+    // Respect any persisted waypoint from the drag store.
+    const wp = ewp[bId]?.[0];
+    const zeroBBox: BBox = { x: 0, y: 0, width: 0, height: 0 };
+    const d = wp
+      ? waypointBezierPath(srcPulled, [wp], tgtPulled, zeroBBox, zeroBBox, srcTangent, tgtTangent)
+      : bezierPath(srcPulled, tgtPulled, srcTangent, tgtTangent);
+
     const path = document.createElementNS(SVG_NS, 'path');
     path.setAttribute('d', d);
+    path.setAttribute('data-edge-id', bId);
     path.setAttribute('class', `mf-bundle-edge mf-bundle-edge--${bundle.direction}`);
     path.setAttribute('data-mf-bundle-cluster', bundle.clusterId);
     path.setAttribute('data-mf-bundle-external', bundle.externalNodeId);
     path.setAttribute('data-mf-bundle-direction', bundle.direction);
     path.setAttribute('data-mf-bundle-count', String(bundle.count));
+    path.setAttribute('data-mf-src-x', String(srcPulled.x));
+    path.setAttribute('data-mf-src-y', String(srcPulled.y));
+    path.setAttribute('data-mf-tgt-x', String(tgtPulled.x));
+    path.setAttribute('data-mf-tgt-y', String(tgtPulled.y));
+    path.setAttribute('data-mf-src-tx', String(srcTangent.x));
+    path.setAttribute('data-mf-src-ty', String(srcTangent.y));
+    path.setAttribute('data-mf-tgt-tx', String(tgtTangent.x));
+    path.setAttribute('data-mf-tgt-ty', String(tgtTangent.y));
     if (markerEndId) path.setAttribute('marker-end', `url(#${markerEndId})`);
     if (bundle.direction === 'bidir' && markerStartId) path.setAttribute('marker-start', `url(#${markerStartId})`);
+    // Wide invisible hit path for easy clicking.
+    const hit = document.createElementNS(SVG_NS, 'path');
+    hit.setAttribute('d', d);
+    hit.setAttribute('class', 'mf-edge-hit');
+    hit.setAttribute('data-hit-edge-id', bId);
+    overlayGroup.appendChild(hit);
     overlayGroup.appendChild(path);
 
     const label = bundleLabel(bundle.count);
     if (label) {
-      const mid = bezierMidpoint(srcAnchor, tgtAnchor, srcTangent, tgtTangent);
+      const mid = wp ?? bezierMidpoint(srcAnchor, tgtAnchor, srcTangent, tgtTangent);
       const text = document.createElementNS(SVG_NS, 'text');
       text.setAttribute('x', String(mid.x));
       text.setAttribute('y', String(mid.y - 6));
@@ -501,45 +589,6 @@ function bezierMidpoint(
     x: mt * mt * mt * a.x + 3 * mt * mt * t * c1.x + 3 * mt * t * t * c2.x + t * t * t * b.x,
     y: mt * mt * mt * a.y + 3 * mt * mt * t * c1.y + 3 * mt * t * t * c2.y + t * t * t * b.y,
   };
-}
-
-/**
- * Return the bounding box of a `g[data-node-id]` in SVG root coordinate space.
- *
- * We derive it from the group's `transform="translate(cx,cy)"` + the inner rect's
- * dimensions, exactly like `clusterElementBBox` does for clusters. This avoids
- * getBBox()+getCTM() which is unreliable when the SVG is inside a CSS-transformed
- * container (the canvas pan/zoom div).
- */
-function getNodeBBoxInSVGSpace(nodeG: SVGGElement, _svgEl: SVGSVGElement): BBox | null {
-  const m = nodeG.getAttribute('transform') ?? '';
-  const match = /translate\(\s*([+-]?\d*\.?\d+)\s*,\s*([+-]?\d*\.?\d+)\s*\)/.exec(m);
-  if (!match) return null;
-  const cx = Number(match[1]);
-  const cy = Number(match[2]);
-
-  // Try the inner rect first (most nodes).
-  // Read rect.x / rect.y directly — do NOT assume the rect is centred at (cx,cy).
-  const rect = nodeG.querySelector<SVGRectElement>('rect');
-  if (rect) {
-    const w = Number(rect.getAttribute('width') ?? '0');
-    const h = Number(rect.getAttribute('height') ?? '0');
-    if (w > 0 && h > 0) {
-      const rx = Number(rect.getAttribute('x') ?? String(-w / 2));
-      const ry = Number(rect.getAttribute('y') ?? String(-h / 2));
-      return { x: cx + rx, y: cy + ry, width: w, height: h };
-    }
-  }
-
-  // For non-rect shapes (diamond/polygon, etc.) use the node <g>'s own getBBox()
-  // which correctly accounts for all child element transforms. The bbox is in
-  // the node's LOCAL coordinate space (centred at cx,cy).
-  try {
-    const bb = nodeG.getBBox();
-    return { x: cx + bb.x, y: cy + bb.y, width: bb.width, height: bb.height };
-  } catch {
-    return null;
-  }
 }
 
 function resolveMarkerId(svg: SVGSVGElement, baseName: string): string | null {

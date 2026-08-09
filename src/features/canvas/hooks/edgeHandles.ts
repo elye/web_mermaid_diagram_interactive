@@ -63,18 +63,27 @@ export function injectEdgeHandles(host: HTMLElement): void {
     const srcId = path.getAttribute('data-edge-source');
     const tgtId = path.getAttribute('data-edge-target');
     const isSelfLoop = srcId !== null && srcId === tgtId;
+    const isBundleEdge = path.hasAttribute('data-mf-bundle-cluster');
 
     // Waypoint handles: curve mode + all self-loops (regardless of style).
     if (lineStyle === 'curve' || isSelfLoop) {
       appendWaypointHandles(g, id, path, waypts);
     }
 
-    // Anchor handles: always, on both ends, for every selected edge.
-    if (srcId) {
-      appendAnchorHandle(g, svgEl, id, srcId, tgtId, anchors.source, 'source');
-    }
-    if (tgtId) {
-      appendAnchorHandle(g, svgEl, id, tgtId, srcId, anchors.target, 'target');
+    if (isBundleEdge) {
+      // Bundle overlay edges (collapsed-cluster summary arrows) don't have
+      // data-edge-source/target — they use data-mf-bundle-cluster/external.
+      // Show anchor handles at the pre-computed anchor coordinates stored
+      // on the path, so the user can drag the line's endpoints.
+      appendBundleAnchorHandles(g, path, id);
+    } else {
+      // Anchor handles: always, on both ends, for every selected edge.
+      if (srcId) {
+        appendAnchorHandle(g, svgEl, id, srcId, tgtId, anchors.source, 'source');
+      }
+      if (tgtId) {
+        appendAnchorHandle(g, svgEl, id, tgtId, srcId, anchors.target, 'target');
+      }
     }
 
     // Append at SVG root so handles paint on top of edge labels.
@@ -103,6 +112,49 @@ function appendWaypointHandles(
   if (mid) g.appendChild(makeWaypointHandle(edgeId, mid.x, mid.y, 0));
 }
 
+/**
+ * Inject anchor handles for a bundle overlay edge (collapsed-cluster summary
+ * arrow). Bundle paths don't carry data-edge-source/target — instead they
+ * store the pre-computed anchor coordinates in data-mf-src-x/y (cluster-side
+ * anchor) and data-mf-tgt-x/y (external-node-side anchor).
+ *
+ * The external-node handle carries data-node-id so the existing anchor-drag
+ * pipeline in useEdgeDrag can snap it around the node perimeter.
+ * The cluster handle carries data-cluster-id so useEdgeDrag can snap it around
+ * the collapsed cluster box perimeter.
+ */
+function appendBundleAnchorHandles(
+  g: SVGGElement,
+  path: SVGPathElement,
+  edgeId: string,
+): void {
+  const sx = path.getAttribute('data-mf-src-x');
+  const sy = path.getAttribute('data-mf-src-y');
+  const tx = path.getAttribute('data-mf-tgt-x');
+  const ty = path.getAttribute('data-mf-tgt-y');
+  if (sx === null || sy === null || tx === null || ty === null) return;
+
+  const clusterId = path.getAttribute('data-mf-bundle-cluster');
+  const externalId = path.getAttribute('data-mf-bundle-external');
+  const direction = path.getAttribute('data-mf-bundle-direction');
+  if (!clusterId || !externalId) return;
+
+  // Determine which end connects to which.
+  // direction 'in':   src = external, tgt = cluster
+  // direction 'out' / 'bidir': src = cluster, tgt = external
+  const srcIsCluster = direction !== 'in';
+
+  // Source anchor handle.
+  const srcHandle = makeAnchorHandle(edgeId, Number(sx), Number(sy), 'source',
+    srcIsCluster ? null : externalId, srcIsCluster ? clusterId : null);
+  g.appendChild(srcHandle);
+
+  // Target anchor handle.
+  const tgtHandle = makeAnchorHandle(edgeId, Number(tx), Number(ty), 'target',
+    srcIsCluster ? externalId : null, srcIsCluster ? null : clusterId);
+  g.appendChild(tgtHandle);
+}
+
 function appendAnchorHandle(
   g: SVGGElement,
   svgEl: SVGSVGElement,
@@ -127,7 +179,7 @@ function appendAnchorHandle(
   const poly = groupPolygon(nodeG);
   if (poly) pt = snapToPolygonOutline(poly, pt);
 
-  g.appendChild(makeAnchorHandle(edgeId, pt.x, pt.y, role, nodeId));
+  g.appendChild(makeAnchorHandle(edgeId, pt.x, pt.y, role, nodeId, null));
 }
 
 /** Auto-computed anchor on `rect` facing the OTHER node's centre. */
@@ -167,12 +219,14 @@ function makeAnchorHandle(
   cx: number,
   cy: number,
   role: 'source' | 'target',
-  nodeId: string,
+  nodeId: string | null,
+  clusterId?: string | null,
 ): SVGCircleElement {
   const c = baseHandle(edgeId, cx, cy, ANCHOR_HANDLE_RADIUS);
   c.setAttribute('data-handle-kind', 'anchor');
   c.setAttribute('data-anchor-role', role);
-  c.setAttribute('data-node-id', nodeId);
+  if (nodeId) c.setAttribute('data-node-id', nodeId);
+  if (clusterId) c.setAttribute('data-cluster-id', clusterId);
   // Filled dot at target end, hollow dot at source — matches arrow direction.
   c.style.fill = role === 'target' ? ACCENT : '#ffffff';
   c.style.stroke = ACCENT;

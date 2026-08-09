@@ -5,6 +5,7 @@
 import type { BBox } from '@/shared/types/diagram';
 import { parseSubgraphMembership } from './subgraphParser';
 import { collectClusterElements, collectNodeBBoxes, clusterElementBBox } from './clusterElements';
+import { groupBBox } from '../svg';
 import { topoOrder } from './topoOrder';
 
 const CLUSTER_PADDING_X = 24; // horizontal padding (each side)
@@ -43,21 +44,74 @@ export function resizeClusters(
   // clusters include already-expanded (or already-collapsed) child bboxes.
   const order = topoOrder(membership);
   for (const subId of order) {
-    // Collapsed clusters own their own rect — skip resizing them.
-    // Their current bbox (the collapsed 120×40 box) will be picked up by
-    // their parent's unionBBox call via clusterEls.
-    if (collapsedClusters?.has(subId)) continue;
-
     const el = clusterEls.get(subId);
     if (!el) continue;
     const members = membership.get(subId);
     if (!members) continue;
+
+    if (collapsedClusters?.has(subId)) {
+      // Collapsed clusters own their rect dimensions — don't resize them.
+      // But we DO need to re-center the cluster <g> translate so it follows
+      // any dragged member-node position overrides. Compute the center from
+      // ALL member node bboxes (including hidden display:none nodes).
+      const center = collapsedClusterCenter(svg, members, membership);
+      if (center) {
+        el.setAttribute('transform', `translate(${center.x}, ${center.y})`);
+      }
+      // Their current bbox (the collapsed 120×40 box) will be picked up by
+      // their parent's unionBBox call via clusterEls.
+      continue;
+    }
 
     const memberBBox = unionBBox(members, nodeBBoxes, clusterEls, membership);
     if (!memberBBox) continue;
 
     applyClusterBBox(el, memberBBox);
   }
+}
+
+/**
+ * Compute the center point of a collapsed cluster from its ALL member nodes
+ * (including hidden display:none nodes). This lets us re-position the
+ * collapsed cluster <g> after member nodes are moved via positionOverrides,
+ * keeping the 120×40 collapsed box visually centered over its members.
+ *
+ * Returns null if no member node bboxes are found.
+ */
+function collapsedClusterCenter(
+  svg: SVGSVGElement,
+  members: Set<string>,
+  membership: Map<string, Set<string>>,
+): { x: number; y: number } | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let found = false;
+
+  function expandMember(id: string) {
+    if (membership.has(id)) {
+      // Nested subgraph — recurse into its members
+      const sub = membership.get(id)!;
+      for (const m of sub) expandMember(m);
+    } else {
+      // Leaf node — read bbox even if hidden (groupBBox uses attributes, not layout)
+      const g = svg.querySelector<SVGGElement>(`g[data-node-id="${id}"]`);
+      if (!g) return;
+      const bbox = groupBBox(g);
+      if (!bbox) return;
+      minX = Math.min(minX, bbox.x);
+      minY = Math.min(minY, bbox.y);
+      maxX = Math.max(maxX, bbox.x + bbox.width);
+      maxY = Math.max(maxY, bbox.y + bbox.height);
+      found = true;
+    }
+  }
+
+  for (const id of members) expandMember(id);
+
+  if (!found) return null;
+  return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
 }
 
 /**
