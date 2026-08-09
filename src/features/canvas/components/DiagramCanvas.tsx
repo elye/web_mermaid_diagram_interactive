@@ -47,6 +47,7 @@ export function DiagramCanvas() {
   const edgeWaypoints = useDiagramStore((s) => s.edgeWaypoints);
   const edgeAnchorOverrides = useDiagramStore((s) => s.edgeAnchorOverrides);
   const edges = useDiagramStore((s) => s.edges);
+  const collapsedClusters = useDiagramStore((s) => s.collapsedClusters);
   const nodeStyles = useStyleStore((s) => s.nodeStyles);
   const edgeStyles = useStyleStore((s) => s.edgeStyles);
   const clusterStyles = useStyleStore((s) => s.clusterStyles);
@@ -488,7 +489,92 @@ export function DiagramCanvas() {
         }
       }
     }
-  }, [selectedNodeIds, selectedEdgeIds, selectedClusterId, svg, edges, source, connectivityMode]);
+    // ── Bundle edge connectivity highlight ────────────────────────────────
+    // Bundle overlay paths (data-mf-bundle-cluster) carry no data-edge-source /
+    // data-edge-target, so the main loop above never touches them.  We do a
+    // second pass over ALL bundle paths and apply mf-edge--connected when the
+    // bundle is relevant to the current selection and connectivity mode.
+    //
+    // Two cases are handled:
+    //  (A) A collapsed cluster is selected → its bundle paths are the visible
+    //      stand-ins for the hidden underlying edges.
+    //  (B) A regular node is selected → bundle paths that connect the node to
+    //      a collapsed cluster must be highlighted too.
+    if (hasSelection && connectivityMode !== 'none') {
+      // Recompute source/sink sets here so this pass always has the full picture
+      // regardless of which branch (edge-only / node / cluster) ran above.
+      const {
+        sourceNodeIds: allSources,
+        sinkNodeIds:   allSinks,
+      } = getConnectedHighlights(effectiveSelection, edges);
+
+      // Filter per mode.
+      const showSources = connectivityMode !== 'only-sinks';
+      const showSinks   = connectivityMode !== 'only-sources';
+      const shownSources = showSources ? allSources : new Set<string>();
+      const shownSinks   = showSinks   ? allSinks   : new Set<string>();
+
+      // Build membership map once (needed to proxy cluster endpoints).
+      const membership = parseSubgraphMembership(source);
+
+      host.querySelectorAll<SVGPathElement>('path[data-mf-bundle-cluster]').forEach((bp) => {
+        const clusterId = bp.getAttribute('data-mf-bundle-cluster') ?? '';
+        const extId     = bp.getAttribute('data-mf-bundle-external') ?? '';
+        const bundleDir = bp.getAttribute('data-mf-bundle-direction') ?? '';
+
+        if (!collapsedClusters.has(clusterId)) return;
+
+        const memberIds = collectAllNodeIds(clusterId, membership);
+
+        // Is either endpoint directly part of the current selection?
+        const extSelected     = effectiveSelection.has(extId);
+        const clusterSelected = clusterId === selectedClusterId
+                             || [...memberIds].some((m) => effectiveSelection.has(m));
+
+        // Is either endpoint a highlighted source / sink?
+        //   • external node as source/sink (standard case when ext is selected).
+        //   • cluster-side: any member node in the source/sink sets.
+        const extIsSource     = shownSources.has(extId);
+        const extIsSink       = shownSinks.has(extId);
+        const clusterIsSource = [...memberIds].some((m) => shownSources.has(m));
+        const clusterIsSink   = [...memberIds].some((m) => shownSinks.has(m));
+
+        let show = false;
+
+        if (connectivityMode === 'only-both') {
+          // only-both: highlight only truly bidirectional bundles where the
+          // cluster ↔ external edge is represented by a bidir bundle.
+          if (bundleDir === 'bidir') {
+            // The bundle is bidir — check if the cluster/ext are in a bidir
+            // relationship with the selection.
+            show = clusterSelected || extSelected
+                || clusterIsSource || clusterIsSink
+                || extIsSource || extIsSink;
+          }
+        } else {
+          // Directed / all modes.
+          // 'out' = cluster → external (cluster is the upstream source).
+          //   Show when: selected node is external (cluster feeds it — source side),
+          //              OR cluster is selected and ext is a downstream sink.
+          // 'in'  = external → cluster (external is the upstream source).
+          //   Show when: selected node is external (it flows into cluster — sink side),
+          //              OR cluster is selected and ext is an upstream source.
+          // 'bidir': show when either the 'out' OR 'in' condition holds.
+
+          const showOut = (extSelected  && clusterIsSource && showSources)
+                       || (clusterSelected && extIsSink   && showSinks);
+          const showIn  = (extSelected  && clusterIsSink  && showSinks)
+                       || (clusterSelected && extIsSource  && showSources);
+
+          if (bundleDir === 'out')        show = showOut;
+          else if (bundleDir === 'in')    show = showIn;
+          else if (bundleDir === 'bidir') show = showOut || showIn;
+        }
+
+        if (show) bp.classList.add('mf-edge--connected');
+      });
+    }
+  }, [selectedNodeIds, selectedEdgeIds, selectedClusterId, svg, edges, source, connectivityMode, collapsedClusters, edgeWaypoints, edgeAnchorOverrides, positionOverrides]);
 
   // ── Tooltip hover wiring ───────────────────────────────────────────────────
   // We mount pointer-enter / pointer-move / pointer-leave listeners on the

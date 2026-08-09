@@ -31,9 +31,10 @@ import { useStyleStore } from '@/stores/styleStore';
 import { useHistoryStore } from '@/stores/historyStore';
 import { routeAllEdges, expandViewBoxToFit } from '../services/edgeRouter';
 import { groupBBox } from '../services/svg';
-import { snapToPerimeter, anchorOnSide } from '../services/routing/anchors';
+import { snapToPerimeter, anchorOnSide, outwardNormal } from '../services/routing/anchors';
 import { clusterElementBBox } from '../services/cluster/clusterElements';
 import { waypointBezierPath } from '../services/routing/bezierChain';
+import { resolveMarkerId, markerTipOvershoot } from './useClusterCollapse';
 import type { BBox } from '@/shared/types/diagram';
 import { HANDLE_CLASS, HANDLES_GROUP_CLASS, injectEdgeHandles } from './edgeHandles';
 import { buildLineStyleMap, cssEscape, svgPoint } from './edgeDragUtils';
@@ -331,14 +332,16 @@ function applyBundleAnchorLive(
   const ttx = Number(path.getAttribute('data-mf-tgt-tx') ?? '0');
   const tty = Number(path.getAttribute('data-mf-tgt-ty') ?? '0');
 
-  // Snap the cursor to the correct element's perimeter.
+  // Snap the cursor to the correct element's perimeter and recompute tangent.
   let newPt = { x: pt.x, y: pt.y };
+  let newTangent: { x: number; y: number } | null = null;
   if (nodeId) {
     const nodeG = svgEl.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nodeId)}"]`);
     const rect = nodeG ? groupBBox(nodeG) : null;
     if (rect) {
       const override = snapToPerimeter(rect, { x: pt.x, y: pt.y });
       newPt = anchorOnSide(rect, override);
+      newTangent = outwardNormal(rect, newPt);
     }
   } else if (clusterId) {
     const clusterG = svgEl.querySelector<SVGGElement>(`g[id="${cssEscape(clusterId)}"]`);
@@ -346,8 +349,14 @@ function applyBundleAnchorLive(
     if (rect) {
       const override = snapToPerimeter(rect, { x: pt.x, y: pt.y });
       newPt = anchorOnSide(rect, override);
+      newTangent = outwardNormal(rect, newPt);
     }
   }
+
+  // Apply arrowhead tip overshoot correction: pull the endpoint back along
+  // the outward normal so the arrowhead tip lands exactly on the box edge.
+  const markerEndId = resolveMarkerId(svgEl, 'arrowhead');
+  const tipOvershoot = markerTipOvershoot(svgEl, markerEndId);
 
   // Update the relevant endpoint and recompute tangent.
   let srcPt = { x: sx, y: sy };
@@ -357,21 +366,42 @@ function applyBundleAnchorLive(
 
   if (role === 'source') {
     srcPt = newPt;
-    // Update the data attribute so applyBundleWaypointLive uses the new position.
+    if (newTangent) srcTangent = newTangent;
+    // Update the data attributes so future drags use the new position/tangent.
     path.setAttribute('data-mf-src-x', String(newPt.x));
     path.setAttribute('data-mf-src-y', String(newPt.y));
+    if (newTangent) {
+      path.setAttribute('data-mf-src-tx', String(newTangent.x));
+      path.setAttribute('data-mf-src-ty', String(newTangent.y));
+    }
   } else {
     tgtPt = newPt;
+    if (newTangent) tgtTangent = newTangent;
     path.setAttribute('data-mf-tgt-x', String(newPt.x));
     path.setAttribute('data-mf-tgt-y', String(newPt.y));
+    if (newTangent) {
+      path.setAttribute('data-mf-tgt-tx', String(newTangent.x));
+      path.setAttribute('data-mf-tgt-ty', String(newTangent.y));
+    }
   }
+
+  // Apply tip overshoot: pull the target endpoint back along its tangent so
+  // the arrowhead tip lands on the box edge (same as useClusterCollapse does).
+  const bundleDir = path.getAttribute('data-mf-bundle-direction') ?? '';
+  const tgtDrawPt = tipOvershoot > 0
+    ? { x: tgtPt.x + tgtTangent.x * tipOvershoot, y: tgtPt.y + tgtTangent.y * tipOvershoot }
+    : tgtPt;
+  // For bidir edges, also pull the src endpoint back.
+  const srcDrawPt = (tipOvershoot > 0 && bundleDir === 'bidir')
+    ? { x: srcPt.x + srcTangent.x * tipOvershoot, y: srcPt.y + srcTangent.y * tipOvershoot }
+    : srcPt;
 
   // Rebuild path: pass through any stored waypoint using the C1-continuous
   // algorithm, or fall back to a direct S-curve when no waypoints exist.
   const { edgeWaypoints } = useDiagramStore.getState();
   const wp = edgeWaypoints[path.getAttribute('data-edge-id') ?? '']?.[0];
   const waypts = wp ? [wp] : [];
-  const newD = waypointBezierPath(srcPt, waypts, tgtPt, zeroBBox, zeroBBox, srcTangent, tgtTangent);
+  const newD = waypointBezierPath(srcDrawPt, waypts, tgtDrawPt, zeroBBox, zeroBBox, srcTangent, tgtTangent);
   path.setAttribute('d', newD);
 }
 

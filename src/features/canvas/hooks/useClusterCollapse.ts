@@ -412,13 +412,20 @@ export function useClusterCollapse(
 
     svgEl.appendChild(overlayGroup);
 
-    // Re-apply the selection class to any bundle paths that are currently
-    // selected. This is needed because this effect re-runs when edgeWaypoints
-    // changes (e.g. after a waypoint drag), which recreates the overlay paths
-    // without the class — but DiagramCanvas's selection effect won't re-run
-    // (selectedEdgeIds hasn't changed) so we must restore it here.
-    const { selectedEdgeIds } = useSelectionStore.getState();
-    selectedEdgeIds.forEach((id) => {
+    // Re-apply selection/connectivity classes to bundle paths. This effect
+    // re-runs when edgeWaypoints or edgeAnchorOverrides change (e.g. after a
+    // waypoint/anchor drag commit), which recreates the overlay paths from
+    // scratch without any classes — but DiagramCanvas's selection highlight
+    // effect may not re-run (those deps haven't changed), so we must restore
+    // the classes here.
+    //
+    // Note: DiagramCanvas's selection effect also lists edgeWaypoints and
+    // edgeAnchorOverrides in its deps, so it will re-run in the same React
+    // flush after this effect (effects run in declaration order). That means
+    // it will re-apply mf-edge--connected to the fresh bundle paths too.
+    // We still restore mf-edge--selected here as a belt-and-suspenders guard.
+    const { selectedEdgeIds: selEdgeIds } = useSelectionStore.getState();
+    selEdgeIds.forEach((id) => {
       const p = svgEl.querySelector<SVGPathElement>(`path[data-edge-id="${id}"][data-mf-bundle-cluster]`);
       p?.classList.add('mf-edge--selected');
     });
@@ -591,7 +598,7 @@ function bezierMidpoint(
   };
 }
 
-function resolveMarkerId(svg: SVGSVGElement, baseName: string): string | null {
+export function resolveMarkerId(svg: SVGSVGElement, baseName: string): string | null {
   // Mermaid may place markers inside a <g> rather than <defs>, so query ALL
   // marker elements rather than only those under defs.
   const byName = svg.querySelector<SVGMarkerElement>(`marker[id*="${baseName}"]`);
@@ -640,7 +647,7 @@ function ensureReversedMarker(svg: SVGSVGElement, markerId: string | null): stri
  * and refX is aligned with the path endpoint. The overshoot in SVG units is:
  *   (vbW - refX) * (markerWidth / vbW)
  */
-function markerTipOvershoot(svg: SVGSVGElement, markerId: string | null): number {
+export function markerTipOvershoot(svg: SVGSVGElement, markerId: string | null): number {
   if (!markerId) return 0;
   const id = markerId.replace(/^url\(#/, '').replace(/\)$/, '');
   const marker = svg.getElementById(id) as SVGMarkerElement | null;
