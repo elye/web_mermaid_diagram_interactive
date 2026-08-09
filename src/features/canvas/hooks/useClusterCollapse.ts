@@ -51,6 +51,10 @@ export function useClusterCollapse(
     svgEl.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
       g.style.display = '';
     });
+    // Un-hide any cluster <g> elements that were hidden as nested collapsed clusters.
+    svgEl.querySelectorAll<SVGGElement>('g.cluster').forEach((g) => {
+      g.style.display = '';
+    });
     svgEl.querySelectorAll<SVGElement>('path[data-edge-id], .mf-edge-hit, g.edgeLabel').forEach(
       (el) => { (el as unknown as HTMLElement).style.display = ''; },
     );
@@ -153,10 +157,37 @@ export function useClusterCollapse(
       });
     }
 
-    // Step 5: resize collapsed cluster rects to node size
+    // Step 5: resize collapsed cluster rects to node size.
+    // Only TOP-LEVEL collapsed clusters get a 120×40 box. A cluster is
+    // top-level if none of its ancestors is also collapsed — nested collapsed
+    // clusters are fully hidden inside their parent's collapsed box.
+    const topLevelCollapsed = new Set<string>();
+    for (const clusterId of collapsedClusters) {
+      // Walk up the containment tree; if any ancestor is also collapsed,
+      // this cluster is not top-level.
+      let isNested = false;
+      for (const [parentId, members] of membership) {
+        if (parentId === clusterId) continue;
+        if (collapsedClusters.has(parentId) && members.has(clusterId)) {
+          isNested = true;
+          break;
+        }
+      }
+      if (!isNested) topLevelCollapsed.add(clusterId);
+    }
+
+    // Hide the <g> elements of nested collapsed clusters (they live inside
+    // a parent that is already rendered as a collapsed 120×40 box).
+    for (const clusterId of collapsedClusters) {
+      if (!topLevelCollapsed.has(clusterId)) {
+        const g = clusterEls.get(clusterId);
+        if (g) g.style.display = 'none';
+      }
+    }
+
     const collapsedBBoxes = new Map<string, BBox>();
 
-    for (const clusterId of collapsedClusters) {
+    for (const clusterId of topLevelCollapsed) {
       const g = clusterEls.get(clusterId);
       if (!g) continue;
       const originalBBox = clusterElementBBox(g);

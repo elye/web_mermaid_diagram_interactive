@@ -15,6 +15,31 @@
 import { create } from 'zustand';
 import { DEFAULT_MERMAID_SOURCE } from '@/shared/constants/defaults';
 import type { NodeMeta, EdgeMeta, PositionOverride, EdgeWaypoint, EdgeAnchorOverride } from '@/shared/types/diagram';
+import { parseSubgraphMembership } from '@/features/canvas/services/cluster/subgraphParser';
+
+/**
+ * Collect all nested subgraph ids that are direct or indirect children of
+ * `clusterId` in the membership map (breadth-first).
+ */
+function collectNestedSubclusters(
+  clusterId: string,
+  membership: Map<string, Set<string>>,
+): string[] {
+  const result: string[] = [];
+  const queue = [clusterId];
+  while (queue.length) {
+    const current = queue.shift()!;
+    const members = membership.get(current);
+    if (!members) continue;
+    for (const m of members) {
+      if (membership.has(m)) {
+        result.push(m);
+        queue.push(m);
+      }
+    }
+  }
+  return result;
+}
 
 export interface DiagramState {
   source: string;
@@ -120,8 +145,17 @@ export const useDiagramStore = create<DiagramState>((set) => ({
   toggleClusterCollapse: (clusterId) =>
     set((s) => {
       const next = new Set(s.collapsedClusters);
-      if (next.has(clusterId)) next.delete(clusterId);
-      else next.add(clusterId);
+      const membership = parseSubgraphMembership(s.source);
+      const nested = collectNestedSubclusters(clusterId, membership);
+      if (next.has(clusterId)) {
+        // Expanding: remove this cluster and all nested sub-clusters.
+        next.delete(clusterId);
+        for (const id of nested) next.delete(id);
+      } else {
+        // Collapsing: add this cluster and all nested sub-clusters.
+        next.add(clusterId);
+        for (const id of nested) next.add(id);
+      }
       return { collapsedClusters: next };
     }),
   setClusterCollapsed: (clusterId, collapsed) =>
@@ -129,8 +163,15 @@ export const useDiagramStore = create<DiagramState>((set) => ({
       const alreadyCollapsed = s.collapsedClusters.has(clusterId);
       if (alreadyCollapsed === collapsed) return {};
       const next = new Set(s.collapsedClusters);
-      if (collapsed) next.add(clusterId);
-      else next.delete(clusterId);
+      const membership = parseSubgraphMembership(s.source);
+      const nested = collectNestedSubclusters(clusterId, membership);
+      if (collapsed) {
+        next.add(clusterId);
+        for (const id of nested) next.add(id);
+      } else {
+        next.delete(clusterId);
+        for (const id of nested) next.delete(id);
+      }
       return { collapsedClusters: next };
     }),
   expandAllClusters: () =>
