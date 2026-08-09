@@ -124,13 +124,11 @@ export function useClusterCollapse(
     const clusterEls = collectClusterElements(svgEl);
 
     if (collapsedClusters.size === 0) {
-      // No collapsed clusters — inject expanded-state toggle buttons, then
-      // refit all cluster boxes around their member nodes (handles the case
-      // where the last collapsed cluster was just expanded and parent boxes
-      // need to re-wrap the now-full-size children).
+      // No collapsed clusters — refit all cluster boxes first so the rect
+      // dimensions are final before we compute button positions.
       const membership0 = parseSubgraphMembership(source);
-      injectToggleButtons(clusterEls, collapsedClusters, membership0, toggleClusterCollapse);
       resizeClusters(svgEl, source, collapsedClusters);
+      injectToggleButtons(clusterEls, collapsedClusters, membership0, toggleClusterCollapse);
       return;
     }
 
@@ -259,7 +257,9 @@ export function useClusterCollapse(
       g.classList.add('mf-cluster--collapsed');
     }
 
-    // Step 5b: inject toggle buttons NOW, after rect resize, so bboxes are correct.
+    // Step 5b: resize outer (non-collapsed) clusters around the new collapsed
+    // child boxes, then inject toggle buttons so positions reflect final sizes.
+    resizeClusters(svgEl, source, collapsedClusters);
     injectToggleButtons(clusterEls, collapsedClusters, membership, toggleClusterCollapse);
 
     // Step 6: draw properly-routed bundled bezier arrows
@@ -536,21 +536,24 @@ function injectToggleButtons(
 
     const isCollapsed = collapsedClusters.has(clusterId);
     const btnSize = 16;
-    // Compute button position in the cluster <g>'s LOCAL coordinate system.
-    // The rect is centred at the <g>'s origin: x=-w/2, y=-h/2, w, h.
-    const w = Number(rect.getAttribute('width') ?? 0);
-    const h = Number(rect.getAttribute('height') ?? 0);
+    // Read the rect's actual x/y/width/height from DOM attributes so the
+    // button position is correct even if the rect is not perfectly centred
+    // at the <g>'s origin (e.g. after resizeClusters rewrites the transform).
+    const rx = Number(rect.getAttribute('x') ?? 0);
+    const ry = Number(rect.getAttribute('y') ?? 0);
+    const rw = Number(rect.getAttribute('width') ?? 0);
+    const rh = Number(rect.getAttribute('height') ?? 0);
     let btnX: number;
     let btnY: number;
 
     if (isCollapsed) {
       // Right edge, vertically centred.
-      btnX = w / 2 - btnSize - 2;
-      btnY = -(btnSize / 2);
+      btnX = rx + rw - btnSize - 2;
+      btnY = ry + rh / 2 - btnSize / 2;
     } else {
       // Top-right corner.
-      btnX = w / 2 - btnSize - 4;
-      btnY = -h / 2 + 4;
+      btnX = rx + rw - btnSize - 4;
+      btnY = ry + 4;
     }
 
     const fo = document.createElementNS(SVG_NS, 'foreignObject');
