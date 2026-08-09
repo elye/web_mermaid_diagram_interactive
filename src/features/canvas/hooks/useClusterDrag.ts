@@ -44,6 +44,14 @@ interface ClusterDragCtx {
    */
   isCollapsed: boolean;
   clusterOriginalPos: { x: number; y: number };
+  /**
+   * Nested collapsed cluster <g> elements that must be translated alongside
+   * member nodes when dragging a non-collapsed outer cluster. These are
+   * hidden (display:none) so they won't be picked up by the node loop, but
+   * their DOM positions still need to stay in sync so bundle overlay edges
+   * render at the correct location during the drag.
+   */
+  nestedCollapsedClusters: Array<{ g: SVGGElement; ox: number; oy: number }>;
 }
 
 /** Parse the translate(x,y) of a node <g> element. */
@@ -94,6 +102,12 @@ export function useClusterDrag(
             g.setAttribute('transform', `translate(${orig.x + dx}, ${orig.y + dy})`);
           }
         });
+        // Also translate any nested collapsed cluster <g> elements — these are
+        // hidden (display:none) so the node loop above skips them, but their
+        // DOM translate must stay in sync so bundle overlays draw correctly.
+        for (const { g, ox, oy } of ctx.nestedCollapsedClusters) {
+          g.setAttribute('transform', `translate(${ox + dx}, ${oy + dy})`);
+        }
       }
 
       // Keep edges routed and cluster boxes resized every frame.
@@ -228,6 +242,42 @@ export function useClusterDrag(
       // Record the cluster <g> original translate for collapsed-drag mode.
       const clusterOriginalPos = readNodeTranslate(clusterGroup as unknown as SVGGElement);
 
+      // For non-collapsed outer clusters: find any nested sub-clusters that are
+      // themselves collapsed (hidden display:none). We must track their <g>
+      // positions and translate them alongside the member nodes so bundle
+      // overlay edges stay correct during the drag.
+      const nestedCollapsedClusters: Array<{ g: SVGGElement; ox: number; oy: number }> = [];
+      if (!isCollapsed && collapsedClusters.size > 0) {
+        // BFS over the membership tree to collect all nested sub-cluster IDs.
+        const nestedSubIds: string[] = [];
+        const queue = [clusterId];
+        const visited = new Set<string>();
+        while (queue.length) {
+          const cur = queue.shift()!;
+          if (visited.has(cur)) continue;
+          visited.add(cur);
+          const members = membership.get(cur);
+          if (!members) continue;
+          for (const m of members) {
+            if (membership.has(m)) {
+              nestedSubIds.push(m);
+              queue.push(m);
+            }
+          }
+        }
+        // For each nested sub-cluster that is currently collapsed, record its
+        // <g> element and original position.
+        const clusterEls = svg.querySelectorAll<SVGGElement>('g.cluster');
+        clusterEls.forEach((g) => {
+          const rawId = g.getAttribute('id') ?? '';
+          // Re-use the same extractClusterUserId logic.
+          const uid = extractClusterUserId(rawId);
+          if (uid && nestedSubIds.includes(uid) && collapsedClusters.has(uid)) {
+            nestedCollapsedClusters.push({ g, ox: readNodeTranslate(g).x, oy: readNodeTranslate(g).y });
+          }
+        });
+      }
+
       ctx = {
         clusterId,
         clusterGroup,
@@ -238,6 +288,7 @@ export function useClusterDrag(
         moved: false,
         isCollapsed,
         clusterOriginalPos,
+        nestedCollapsedClusters,
       };
 
       clusterGroup.classList.add('mf-cluster--dragging');
