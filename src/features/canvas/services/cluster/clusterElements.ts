@@ -68,10 +68,14 @@ export function clusterElementBBox(g: SVGGElement): BBox | null {
   const w = Number(rect.getAttribute('width') ?? '0');
   const h = Number(rect.getAttribute('height') ?? '0');
   if (w === 0 && h === 0) return null;
-  // rect.x and rect.y are centred offsets (negative halves).
+  // Read rect.x / rect.y directly rather than assuming -w/2 / -h/2 centering,
+  // so the bbox is correct even when Mermaid uses non-centred coordinates.
+  // Fall back to -w/2 / -h/2 when the attributes are absent.
+  const rx = Number(rect.getAttribute('x') ?? String(-w / 2));
+  const ry = Number(rect.getAttribute('y') ?? String(-h / 2));
   return {
-    x: t.x - w / 2,
-    y: t.y - h / 2,
+    x: t.x + rx,
+    y: t.y + ry,
     width: w,
     height: h,
   };

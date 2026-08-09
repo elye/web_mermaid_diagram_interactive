@@ -280,6 +280,8 @@ export function useClusterCollapse(
     overlayGroup.setAttribute('class', 'mf-bundle-overlays');
 
     const markerEndId = resolveMarkerId(svgEl, 'arrowhead');
+    const markerStartId = ensureReversedMarker(svgEl, markerEndId);
+    const tipOvershoot = markerTipOvershoot(svgEl, markerEndId);
 
     for (const bundle of bundledEdges) {
       const clusterBBox = collapsedBBoxes.get(bundle.clusterId);
@@ -312,7 +314,21 @@ export function useClusterCollapse(
       const srcTangent = outwardNormal(srcBox, srcAnchor);
       const tgtTangent = outwardNormal(tgtBox, tgtAnchor);
 
-      const d = bezierPath(srcAnchor, tgtAnchor, srcTangent, tgtTangent);
+      // Pull each arrow endpoint back by the marker tip overshoot so the
+      // visual arrowhead tip lands exactly on the box edge, not inside it.
+      // tgtTangent points outward FROM the target box — moving the endpoint in
+      // that direction shortens the path and lets the tip reach the box edge.
+      const tgtPulled = tipOvershoot > 0
+        ? { x: tgtAnchor.x + tgtTangent.x * tipOvershoot,
+            y: tgtAnchor.y + tgtTangent.y * tipOvershoot }
+        : tgtAnchor;
+      // For bidir, also pull the src endpoint back.
+      const srcPulled = (tipOvershoot > 0 && bundle.direction === 'bidir')
+        ? { x: srcAnchor.x + srcTangent.x * tipOvershoot,
+            y: srcAnchor.y + srcTangent.y * tipOvershoot }
+        : srcAnchor;
+
+      const d = bezierPath(srcPulled, tgtPulled, srcTangent, tgtTangent);
 
       const path = document.createElementNS(SVG_NS, 'path');
       path.setAttribute('d', d);
@@ -325,8 +341,8 @@ export function useClusterCollapse(
       if (markerEndId) {
         path.setAttribute('marker-end', `url(#${markerEndId})`);
       }
-      if (bundle.direction === 'bidir' && markerEndId) {
-        path.setAttribute('marker-start', `url(#${markerEndId})`);
+      if (bundle.direction === 'bidir' && markerStartId) {
+        path.setAttribute('marker-start', `url(#${markerStartId})`);
       }
       overlayGroup.appendChild(path);
 
@@ -348,14 +364,6 @@ export function useClusterCollapse(
     }
 
     svgEl.appendChild(overlayGroup);
-
-    // Step 7: refit parent cluster boxes around the collapsed children.
-    // After collapsing Inner to 120×40, Outer's rect must shrink to wrap the
-    // small box instead of the expanded member nodes. We pass collapsedClusters
-    // so resizeClusters skips the collapsed clusters themselves (their 120×40
-    // rect is already set above) but DOES include their current bbox when
-    // computing the parent's union.
-    resizeClusters(svgEl, source, collapsedClusters);
   }, [svg, source, collapsedClusters, edges, toggleClusterCollapse, svgHostRef]);
 }
 
@@ -404,6 +412,8 @@ export function rebuildBundleOverlays(svgEl: SVGSVGElement): void {
   overlayGroup.setAttribute('class', 'mf-bundle-overlays');
 
   const markerEndId = resolveMarkerId(svgEl, 'arrowhead');
+  const markerStartId = ensureReversedMarker(svgEl, markerEndId);
+  const tipOvershoot = markerTipOvershoot(svgEl, markerEndId);
 
   for (const bundle of bundledEdges) {
     const clusterBBox = collapsedBBoxes.get(bundle.clusterId);
@@ -424,7 +434,16 @@ export function rebuildBundleOverlays(svgEl: SVGSVGElement): void {
     const srcTangent = outwardNormal(srcBox, srcAnchor);
     const tgtTangent = outwardNormal(tgtBox, tgtAnchor);
 
-    const d = bezierPath(srcAnchor, tgtAnchor, srcTangent, tgtTangent);
+    const tgtPulled = tipOvershoot > 0
+      ? { x: tgtAnchor.x + tgtTangent.x * tipOvershoot,
+          y: tgtAnchor.y + tgtTangent.y * tipOvershoot }
+      : tgtAnchor;
+    const srcPulled = (tipOvershoot > 0 && bundle.direction === 'bidir')
+      ? { x: srcAnchor.x + srcTangent.x * tipOvershoot,
+          y: srcAnchor.y + srcTangent.y * tipOvershoot }
+      : srcAnchor;
+
+    const d = bezierPath(srcPulled, tgtPulled, srcTangent, tgtTangent);
     const path = document.createElementNS(SVG_NS, 'path');
     path.setAttribute('d', d);
     path.setAttribute('class', `mf-bundle-edge mf-bundle-edge--${bundle.direction}`);
@@ -433,7 +452,7 @@ export function rebuildBundleOverlays(svgEl: SVGSVGElement): void {
     path.setAttribute('data-mf-bundle-direction', bundle.direction);
     path.setAttribute('data-mf-bundle-count', String(bundle.count));
     if (markerEndId) path.setAttribute('marker-end', `url(#${markerEndId})`);
-    if (bundle.direction === 'bidir' && markerEndId) path.setAttribute('marker-start', `url(#${markerEndId})`);
+    if (bundle.direction === 'bidir' && markerStartId) path.setAttribute('marker-start', `url(#${markerStartId})`);
     overlayGroup.appendChild(path);
 
     const label = bundleLabel(bundle.count);
@@ -499,29 +518,90 @@ function getNodeBBoxInSVGSpace(nodeG: SVGGElement, _svgEl: SVGSVGElement): BBox 
   const cx = Number(match[1]);
   const cy = Number(match[2]);
 
-  // Try the inner rect first (most nodes); fall back to polygon (diamond shapes).
+  // Try the inner rect first (most nodes).
+  // Read rect.x / rect.y directly — do NOT assume the rect is centred at (cx,cy).
   const rect = nodeG.querySelector<SVGRectElement>('rect');
   if (rect) {
     const w = Number(rect.getAttribute('width') ?? '0');
     const h = Number(rect.getAttribute('height') ?? '0');
     if (w > 0 && h > 0) {
-      return { x: cx - w / 2, y: cy - h / 2, width: w, height: h };
+      const rx = Number(rect.getAttribute('x') ?? String(-w / 2));
+      const ry = Number(rect.getAttribute('y') ?? String(-h / 2));
+      return { x: cx + rx, y: cy + ry, width: w, height: h };
     }
   }
-  const poly = nodeG.querySelector<SVGPolygonElement>('polygon');
-  if (poly) {
-    try {
-      const bb = poly.getBBox();
-      return { x: cx + bb.x, y: cy + bb.y, width: bb.width, height: bb.height };
-    } catch {
-      return null;
-    }
+
+  // For non-rect shapes (diamond/polygon, etc.) use the node <g>'s own getBBox()
+  // which correctly accounts for all child element transforms. The bbox is in
+  // the node's LOCAL coordinate space (centred at cx,cy).
+  try {
+    const bb = nodeG.getBBox();
+    return { x: cx + bb.x, y: cy + bb.y, width: bb.width, height: bb.height };
+  } catch {
+    return null;
   }
-  return null;
 }
 
 function resolveMarkerId(svg: SVGSVGElement, baseName: string): string | null {
-  return svg.querySelector<SVGMarkerElement>(`defs marker[id^="${baseName}"]`)?.id ?? null;
+  // Mermaid may place markers inside a <g> rather than <defs>, so query ALL
+  // marker elements rather than only those under defs.
+  const byName = svg.querySelector<SVGMarkerElement>(`marker[id*="${baseName}"]`);
+  if (byName) return byName.id;
+  // Fall back to the Mermaid "pointEnd" marker (flowchart-pointEnd).
+  const mermaidEnd =
+    svg.querySelector<SVGMarkerElement>('marker[id*="pointEnd"]') ??
+    svg.querySelector<SVGMarkerElement>('marker[id$="End"]');
+  return mermaidEnd?.id ?? null;
+}
+
+/**
+ * Return the id of a reversed copy of the given marker, suitable for use
+ * with `marker-start` on bidir edges. With `orient="auto"`, a marker-start
+ * arrowhead points AWAY from the source box (wrong for a bidir arrow that
+ * should show an incoming arrowhead). By cloning the marker with
+ * `orient="auto-start-reverse"` the browser flips it 180° so the tip points
+ * back INTO the source box as expected.
+ *
+ * The cloned marker is re-used on subsequent calls (idempotent).
+ */
+function ensureReversedMarker(svg: SVGSVGElement, markerId: string | null): string | null {
+  if (!markerId) return null;
+  const id = markerId.replace(/^url\(#/, '').replace(/\)$/, '');
+  const reversedId = `${id}--rev`;
+  if (svg.getElementById(reversedId)) return reversedId;
+
+  const original = svg.getElementById(id) as SVGMarkerElement | null;
+  if (!original) return null;
+
+  const clone = original.cloneNode(true) as SVGMarkerElement;
+  clone.id = reversedId;
+  clone.setAttribute('orient', 'auto-start-reverse');
+  // Insert into the same container as the original marker.
+  original.parentNode?.insertBefore(clone, original.nextSibling);
+  return reversedId;
+}
+
+/**
+ * Compute how many SVG user-space units the tip of the arrowhead protrudes
+ * beyond the path endpoint, so callers can pull the endpoint back by that
+ * amount and have the visual tip land exactly on the target box edge.
+ *
+ * For a marker with viewBox="0 0 vbW vbH", refX, and markerWidth (in
+ * userSpaceOnUse units), the tip is at the right edge of the viewBox (vbW),
+ * and refX is aligned with the path endpoint. The overshoot in SVG units is:
+ *   (vbW - refX) * (markerWidth / vbW)
+ */
+function markerTipOvershoot(svg: SVGSVGElement, markerId: string | null): number {
+  if (!markerId) return 0;
+  const id = markerId.replace(/^url\(#/, '').replace(/\)$/, '');
+  const marker = svg.getElementById(id) as SVGMarkerElement | null;
+  if (!marker) return 0;
+  const vb = marker.getAttribute('viewBox')?.split(/[\s,]+/).map(Number);
+  const refX = Number(marker.getAttribute('refX') ?? 0);
+  const mw = Number(marker.getAttribute('markerWidth') ?? 0);
+  if (!vb || vb.length < 4 || vb[2] === 0) return 0;
+  const vbW = vb[2];
+  return (vbW - refX) * (mw / vbW);
 }
 
 function injectToggleButtons(
