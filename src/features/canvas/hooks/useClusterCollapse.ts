@@ -128,7 +128,8 @@ export function useClusterCollapse(
       // refit all cluster boxes around their member nodes (handles the case
       // where the last collapsed cluster was just expanded and parent boxes
       // need to re-wrap the now-full-size children).
-      injectToggleButtons(clusterEls, collapsedClusters, toggleClusterCollapse);
+      const membership0 = parseSubgraphMembership(source);
+      injectToggleButtons(clusterEls, collapsedClusters, membership0, toggleClusterCollapse);
       resizeClusters(svgEl, source, collapsedClusters);
       return;
     }
@@ -259,7 +260,7 @@ export function useClusterCollapse(
     }
 
     // Step 5b: inject toggle buttons NOW, after rect resize, so bboxes are correct.
-    injectToggleButtons(clusterEls, collapsedClusters, toggleClusterCollapse);
+    injectToggleButtons(clusterEls, collapsedClusters, membership, toggleClusterCollapse);
 
     // Step 6: draw properly-routed bundled bezier arrows
     if (bundledEdges.length === 0) return;
@@ -526,6 +527,7 @@ function resolveMarkerId(svg: SVGSVGElement, baseName: string): string | null {
 function injectToggleButtons(
   clusterEls: Map<string, SVGGElement>,
   collapsedClusters: ReadonlySet<string>,
+  membership: Map<string, Set<string>>,
   toggleClusterCollapse: (id: string) => void,
 ) {
   for (const [clusterId, clusterG] of clusterEls) {
@@ -565,17 +567,95 @@ function injectToggleButtons(
       : 'mf-cluster-toggle__btn';
     btn.title = isCollapsed
       ? `Expand subgraph "${clusterId}"`
-      : `Collapse subgraph "${clusterId}"` ;
+      : `Collapse subgraph "${clusterId}"`;
     btn.setAttribute('aria-label', btn.title);
     btn.textContent = isCollapsed ? '▶' : '▼';
 
     btn.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
+
+      if (isCollapsed) {
+        // Check whether any direct-child sub-clusters are also collapsed.
+        // A direct child is a member of this cluster that is itself a subgraph.
+        const directMembers = membership.get(clusterId) ?? new Set<string>();
+        const hasNestedCollapsed = [...directMembers].some(
+          (m) => membership.has(m) && collapsedClusters.has(m),
+        );
+
+        if (hasNestedCollapsed) {
+          // Show a choice popover near the button.
+          showExpandPopover(btn, clusterId, toggleClusterCollapse);
+          return;
+        }
+      }
+
       toggleClusterCollapse(clusterId);
     });
 
     fo.appendChild(btn);
     clusterG.appendChild(fo);
   }
+}
+
+/**
+ * Show a modal dialog asking whether to expand one level or all levels.
+ */
+function showExpandPopover(
+  _anchorEl: HTMLElement,
+  clusterId: string,
+  toggleClusterCollapse: (id: string) => void,
+): void {
+  const { expandClusterAndDescendants } = useDiagramStore.getState();
+
+  const dialog = document.createElement('dialog');
+  dialog.className = 'mf-expand-dialog';
+
+  const title = document.createElement('p');
+  title.className = 'mf-expand-dialog__title';
+  title.textContent = 'Expand subgraph';
+  dialog.appendChild(title);
+
+  const body = document.createElement('p');
+  body.className = 'mf-expand-dialog__body';
+  body.textContent = 'This subgraph contains nested collapsed subgraphs. How would you like to expand?';
+  dialog.appendChild(body);
+
+  const actions = document.createElement('div');
+  actions.className = 'mf-expand-dialog__actions';
+
+  const close = () => { dialog.close(); dialog.remove(); };
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'mf-expand-dialog__btn';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.addEventListener('click', close);
+  actions.appendChild(cancelBtn);
+
+  const oneLevelBtn = document.createElement('button');
+  oneLevelBtn.className = 'mf-expand-dialog__btn';
+  oneLevelBtn.textContent = 'First level only';
+  oneLevelBtn.addEventListener('click', () => { close(); toggleClusterCollapse(clusterId); });
+  actions.appendChild(oneLevelBtn);
+
+  const allBtn = document.createElement('button');
+  allBtn.className = 'mf-expand-dialog__btn mf-expand-dialog__btn--primary';
+  allBtn.textContent = 'Expand all';
+  allBtn.addEventListener('click', () => { close(); expandClusterAndDescendants(clusterId); });
+  actions.appendChild(allBtn);
+
+  dialog.appendChild(actions);
+  document.body.appendChild(dialog);
+  dialog.showModal();
+
+  // Clicking the backdrop (outside the dialog box) cancels.
+  dialog.addEventListener('click', (ev) => {
+    const rect = dialog.getBoundingClientRect();
+    if (
+      ev.clientX < rect.left || ev.clientX > rect.right ||
+      ev.clientY < rect.top  || ev.clientY > rect.bottom
+    ) {
+      close();
+    }
+  });
 }

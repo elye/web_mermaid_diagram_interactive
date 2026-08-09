@@ -82,6 +82,8 @@ export interface DiagramState {
   setClusterCollapsed: (clusterId: string, collapsed: boolean) => void;
   /** Expand every currently-collapsed cluster. */
   expandAllClusters: () => void;
+  /** Expand a cluster and all of its collapsed descendants. */
+  expandClusterAndDescendants: (clusterId: string) => void;
   deleteNodes: (ids: string[]) => void;
   hydrate: (patch: Partial<DiagramState>) => void;
 }
@@ -146,13 +148,15 @@ export const useDiagramStore = create<DiagramState>((set) => ({
     set((s) => {
       const next = new Set(s.collapsedClusters);
       const membership = parseSubgraphMembership(s.source);
-      const nested = collectNestedSubclusters(clusterId, membership);
       if (next.has(clusterId)) {
-        // Expanding: remove this cluster and all nested sub-clusters.
+        // Expanding: only remove this cluster itself.
+        // Nested sub-clusters remain collapsed so the user expands level by
+        // level — clicking Outer reveals Inner as a 120×40 collapsed box.
         next.delete(clusterId);
-        for (const id of nested) next.delete(id);
       } else {
-        // Collapsing: add this cluster and all nested sub-clusters.
+        // Collapsing: add this cluster and all nested sub-clusters so that
+        // everything inside is hidden under the single collapsed box.
+        const nested = collectNestedSubclusters(clusterId, membership);
         next.add(clusterId);
         for (const id of nested) next.add(id);
       }
@@ -164,18 +168,27 @@ export const useDiagramStore = create<DiagramState>((set) => ({
       if (alreadyCollapsed === collapsed) return {};
       const next = new Set(s.collapsedClusters);
       const membership = parseSubgraphMembership(s.source);
-      const nested = collectNestedSubclusters(clusterId, membership);
       if (collapsed) {
+        // Collapsing: add this cluster and all its nested sub-clusters.
+        const nested = collectNestedSubclusters(clusterId, membership);
         next.add(clusterId);
         for (const id of nested) next.add(id);
       } else {
+        // Expanding: only remove this cluster itself (single-level).
         next.delete(clusterId);
-        for (const id of nested) next.delete(id);
       }
       return { collapsedClusters: next };
     }),
   expandAllClusters: () =>
     set((s) => (s.collapsedClusters.size === 0 ? {} : { collapsedClusters: new Set<string>() })),
+  expandClusterAndDescendants: (clusterId) =>
+    set((s) => {
+      const membership = parseSubgraphMembership(s.source);
+      const toRemove = new Set([clusterId, ...collectNestedSubclusters(clusterId, membership)]);
+      const next = new Set(s.collapsedClusters);
+      for (const id of toRemove) next.delete(id);
+      return next.size === s.collapsedClusters.size ? {} : { collapsedClusters: next };
+    }),
   deleteNodes: (ids) =>
     set((s) => ({
       source: removeNodesFromSource(s.source, ids),
