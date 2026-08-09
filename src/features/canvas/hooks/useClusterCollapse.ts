@@ -467,22 +467,26 @@ function injectToggleButtons(
   toggleClusterCollapse: (id: string) => void,
 ) {
   for (const [clusterId, clusterG] of clusterEls) {
-    const bbox = clusterElementBBox(clusterG);
-    if (!bbox) continue;
+    const rect = clusterG.querySelector<SVGRectElement>(':scope > rect');
+    if (!rect) continue;
 
     const isCollapsed = collapsedClusters.has(clusterId);
     const btnSize = 16;
+    // Compute button position in the cluster <g>'s LOCAL coordinate system.
+    // The rect is centred at the <g>'s origin: x=-w/2, y=-h/2, w, h.
+    const w = Number(rect.getAttribute('width') ?? 0);
+    const h = Number(rect.getAttribute('height') ?? 0);
     let btnX: number;
     let btnY: number;
 
     if (isCollapsed) {
-      // Place the toggle at the right edge of the collapsed (small) box.
-      // The bbox here reflects the ALREADY-resized rect dimensions (COLLAPSED_W × COLLAPSED_H).
-      btnX = bbox.x + bbox.width - btnSize - 2;
-      btnY = bbox.y + (bbox.height - btnSize) / 2;
+      // Right edge, vertically centred.
+      btnX = w / 2 - btnSize - 2;
+      btnY = -(btnSize / 2);
     } else {
-      btnX = bbox.x + bbox.width - btnSize - 4;
-      btnY = bbox.y + 4;
+      // Top-right corner.
+      btnX = w / 2 - btnSize - 4;
+      btnY = -h / 2 + 4;
     }
 
     const fo = document.createElementNS(SVG_NS, 'foreignObject');
