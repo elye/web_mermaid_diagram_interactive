@@ -75,7 +75,7 @@ export function injectEdgeHandles(host: HTMLElement): void {
       // data-edge-source/target — they use data-mf-bundle-cluster/external.
       // Show anchor handles at the pre-computed anchor coordinates stored
       // on the path, so the user can drag the line's endpoints.
-      appendBundleAnchorHandles(g, path, id);
+      appendBundleAnchorHandles(g, svgEl, path, id);
     } else {
       // Anchor handles: always, on both ends, for every selected edge.
       if (srcId) {
@@ -125,6 +125,7 @@ function appendWaypointHandles(
  */
 function appendBundleAnchorHandles(
   g: SVGGElement,
+  svgEl: SVGSVGElement,
   path: SVGPathElement,
   edgeId: string,
 ): void {
@@ -144,14 +145,20 @@ function appendBundleAnchorHandles(
   // direction 'out' / 'bidir': src = cluster, tgt = external
   const srcIsCluster = direction !== 'in';
 
+  // Cluster-to-cluster bundles: externalId is another cluster id, not a node id.
+  // Detect by checking whether a g[data-node-id] exists for it in the SVG.
+  const externalIsCluster = !svgEl.querySelector(`g[data-node-id="${cssEscape(externalId)}"]`);
+
   // Source anchor handle.
   const srcHandle = makeAnchorHandle(edgeId, Number(sx), Number(sy), 'source',
-    srcIsCluster ? null : externalId, srcIsCluster ? clusterId : null);
+    srcIsCluster ? null : (externalIsCluster ? null : externalId),
+    srcIsCluster ? clusterId : (externalIsCluster ? externalId : null));
   g.appendChild(srcHandle);
 
   // Target anchor handle.
   const tgtHandle = makeAnchorHandle(edgeId, Number(tx), Number(ty), 'target',
-    srcIsCluster ? externalId : null, srcIsCluster ? null : clusterId);
+    srcIsCluster ? (externalIsCluster ? null : externalId) : null,
+    srcIsCluster ? (externalIsCluster ? externalId : null) : clusterId);
   g.appendChild(tgtHandle);
 }
 

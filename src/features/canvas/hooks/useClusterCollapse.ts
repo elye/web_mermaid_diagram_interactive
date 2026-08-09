@@ -198,23 +198,9 @@ export function useClusterCollapse(
       }
     }
 
-    const collapsedBBoxes = new Map<string, BBox>();
-
     for (const clusterId of topLevelCollapsed) {
       const g = clusterEls.get(clusterId);
       if (!g) continue;
-      const originalBBox = clusterElementBBox(g);
-      if (!originalBBox) continue;
-
-      const cx = originalBBox.x + originalBBox.width / 2;
-      const cy = originalBBox.y + originalBBox.height / 2;
-      const newBBox: BBox = {
-        x: cx - COLLAPSED_W / 2,
-        y: cy - COLLAPSED_H / 2,
-        width: COLLAPSED_W,
-        height: COLLAPSED_H,
-      };
-      collapsedBBoxes.set(clusterId, newBBox);
 
       const rect = g.querySelector<SVGRectElement>(':scope > rect');
       if (rect) {
@@ -275,12 +261,16 @@ export function useClusterCollapse(
     resizeClusters(svgEl, source, collapsedClusters);
     injectToggleButtons(clusterEls, collapsedClusters, membership, toggleClusterCollapse);
 
-    // Step 6: draw properly-routed bundled bezier arrows
+    // Step 6: draw properly-routed bundled bezier arrows.
     if (bundledEdges.length === 0) return;
 
+    // Helper: read a cluster's bbox directly from the live DOM (post-resizeClusters).
+    // Always reading fresh avoids any stale pre-computed bbox that mismatches the
+    // actual rendered position after resizeClusters re-centers collapsed clusters.
+    const liveClusterBBox = (id: string): BBox | null =>
+      clusterElementBBox(clusterEls.get(id) ?? null as never);
+
     // Collect visible external node bboxes in SVG root space.
-    // Use groupBBox (shape-only, same as routeAllEdges) so anchors match
-    // the regular routing system's anchor points exactly.
     const extNodeBBoxes = new Map<string, BBox>();
     svgEl.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
       if (g.style.display === 'none') return;
@@ -296,15 +286,13 @@ export function useClusterCollapse(
 
     const markerEndId = resolveMarkerId(svgEl, 'arrowhead');
     const markerStartId = ensureReversedMarker(svgEl, markerEndId);
-    const tipOvershoot = markerTipOvershoot(svgEl, markerEndId);
 
     for (const bundle of bundledEdges) {
-      const clusterBBox = collapsedBBoxes.get(bundle.clusterId);
-      // The external endpoint may itself be a collapsed cluster (cluster-to-cluster
-      // bundle) — look it up in collapsedBBoxes first, then fall back to the
-      // visible-node bbox map.
-      const extBBox =
-        collapsedBBoxes.get(bundle.externalNodeId) ?? extNodeBBoxes.get(bundle.externalNodeId);
+      const clusterBBox = liveClusterBBox(bundle.clusterId);
+      // External may be a collapsed cluster (cluster-to-cluster) or a plain node.
+      const extBBox = collapsedClusters.has(bundle.externalNodeId)
+        ? liveClusterBBox(bundle.externalNodeId)
+        : extNodeBBoxes.get(bundle.externalNodeId);
       if (!clusterBBox || !extBBox) continue;
 
       // Anchor using the same heuristic as routeAllEdges.
@@ -337,19 +325,14 @@ export function useClusterCollapse(
       const srcTangent = outwardNormal(srcBox, srcAnchor);
       const tgtTangent = outwardNormal(tgtBox, tgtAnchor);
 
-      // Pull each arrow endpoint back by the marker tip overshoot so the
-      // visual arrowhead tip lands exactly on the box edge, not inside it.
-      // tgtTangent points outward FROM the target box — moving the endpoint in
-      // that direction shortens the path and lets the tip reach the box edge.
-      const tgtPulled = tipOvershoot > 0
-        ? { x: tgtAnchor.x + tgtTangent.x * tipOvershoot,
-            y: tgtAnchor.y + tgtTangent.y * tipOvershoot }
-        : tgtAnchor;
-      // For bidir, also pull the src endpoint back.
-      const srcPulled = (tipOvershoot > 0 && bundle.direction === 'bidir')
-        ? { x: srcAnchor.x + srcTangent.x * tipOvershoot,
-            y: srcAnchor.y + srcTangent.y * tipOvershoot }
-        : srcAnchor;
+      // Bundle paths use stroke-dasharray, so pulling the endpoint outside
+      // the box (the usual tipOvershoot trick for solid lines) causes the
+      // last visible dash to render outside the box face — visually the
+      // arrow tip appears to "escape" the cluster rect. Bundle arrowheads
+      // are small enough that a minor penetration inside the box is
+      // acceptable, so we always route to the anchor point directly.
+      const tgtPulled = tgtAnchor;
+      const srcPulled = srcAnchor;
       const storedWaypoints = edgeWaypoints[bId];
       const wp = storedWaypoints?.[0];
       // waypointBezierPath requires BBox placeholders (unused by the algorithm)
@@ -423,7 +406,9 @@ export function useClusterCollapse(
     // edgeAnchorOverrides in its deps, so it will re-run in the same React
     // flush after this effect (effects run in declaration order). That means
     // it will re-apply mf-edge--connected to the fresh bundle paths too.
-    // We still restore mf-edge--selected here as a belt-and-suspenders guard.
+    // We restore BOTH mf-edge--selected and mf-edge--connected here as a
+    // belt-and-suspenders guard against any edge case where the selection
+    // effect does not re-run.
     const { selectedEdgeIds: selEdgeIds } = useSelectionStore.getState();
     selEdgeIds.forEach((id) => {
       const p = svgEl.querySelector<SVGPathElement>(`path[data-edge-id="${id}"][data-mf-bundle-cluster]`);
@@ -453,15 +438,6 @@ export function rebuildBundleOverlays(svgEl: SVGSVGElement): void {
 
   const clusterEls = collectClusterElements(svgEl);
 
-  // Collect collapsed cluster bboxes from current DOM state.
-  const collapsedBBoxes = new Map<string, BBox>();
-  for (const clusterId of collapsedClusters) {
-    const g = clusterEls.get(clusterId);
-    if (!g) continue;
-    const bbox = clusterElementBBox(g);
-    if (bbox) collapsedBBoxes.set(clusterId, bbox);
-  }
-
   // Collect visible external node bboxes (shape-only, same as routeAllEdges).
   const extNodeBBoxes = new Map<string, BBox>();
   svgEl.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
@@ -478,11 +454,13 @@ export function rebuildBundleOverlays(svgEl: SVGSVGElement): void {
 
   const markerEndId = resolveMarkerId(svgEl, 'arrowhead');
   const markerStartId = ensureReversedMarker(svgEl, markerEndId);
-  const tipOvershoot = markerTipOvershoot(svgEl, markerEndId);
 
   for (const bundle of bundledEdges) {
-    const clusterBBox = collapsedBBoxes.get(bundle.clusterId);
-    const extBBox = collapsedBBoxes.get(bundle.externalNodeId) ?? extNodeBBoxes.get(bundle.externalNodeId);
+    // Always read live bbox from DOM — avoids stale pre-computed positions.
+    const clusterBBox = clusterElementBBox(clusterEls.get(bundle.clusterId) as SVGGElement);
+    const extBBox = collapsedClusters.has(bundle.externalNodeId)
+      ? clusterElementBBox(clusterEls.get(bundle.externalNodeId) as SVGGElement)
+      : extNodeBBoxes.get(bundle.externalNodeId);
     if (!clusterBBox || !extBBox) continue;
 
     let srcBox: BBox;
@@ -508,14 +486,11 @@ export function rebuildBundleOverlays(svgEl: SVGSVGElement): void {
     const srcTangent = outwardNormal(srcBox, srcAnchor);
     const tgtTangent = outwardNormal(tgtBox, tgtAnchor);
 
-    const tgtPulled = tipOvershoot > 0
-      ? { x: tgtAnchor.x + tgtTangent.x * tipOvershoot,
-          y: tgtAnchor.y + tgtTangent.y * tipOvershoot }
-      : tgtAnchor;
-    const srcPulled = (tipOvershoot > 0 && bundle.direction === 'bidir')
-      ? { x: srcAnchor.x + srcTangent.x * tipOvershoot,
-          y: srcAnchor.y + srcTangent.y * tipOvershoot }
-      : srcAnchor;
+    // Bundle edges are dashed — using tipOvershoot would push the path
+    // endpoint outside the box, making the last dash render beyond the box
+    // face. Dashed arrowheads look fine without the overshoot correction.
+    const tgtPulled = tgtAnchor;
+    const srcPulled = srcAnchor;
 
     // Respect any persisted waypoint from the drag store.
     const wp = ewp[bId]?.[0];

@@ -34,7 +34,7 @@ import { groupBBox } from '../services/svg';
 import { snapToPerimeter, anchorOnSide, outwardNormal } from '../services/routing/anchors';
 import { clusterElementBBox } from '../services/cluster/clusterElements';
 import { waypointBezierPath } from '../services/routing/bezierChain';
-import { resolveMarkerId, markerTipOvershoot } from './useClusterCollapse';
+
 import type { BBox } from '@/shared/types/diagram';
 import { HANDLE_CLASS, HANDLES_GROUP_CLASS, injectEdgeHandles } from './edgeHandles';
 import { buildLineStyleMap, cssEscape, svgPoint } from './edgeDragUtils';
@@ -343,8 +343,9 @@ function applyBundleAnchorLive(
       newPt = anchorOnSide(rect, override);
       newTangent = outwardNormal(rect, newPt);
     }
-  } else if (clusterId) {
-    const clusterG = svgEl.querySelector<SVGGElement>(`g[id="${cssEscape(clusterId)}"]`);
+  }
+  if ((!nodeId || !svgEl.querySelector(`g[data-node-id="${cssEscape(nodeId)}"]`)) && clusterId) {
+    const clusterG = svgEl.querySelector<SVGGElement>(`g.cluster[id="${cssEscape(clusterId)}"]`);
     const rect = clusterG ? clusterElementBBox(clusterG as SVGGElement) : null;
     if (rect) {
       const override = snapToPerimeter(rect, { x: pt.x, y: pt.y });
@@ -352,11 +353,6 @@ function applyBundleAnchorLive(
       newTangent = outwardNormal(rect, newPt);
     }
   }
-
-  // Apply arrowhead tip overshoot correction: pull the endpoint back along
-  // the outward normal so the arrowhead tip lands exactly on the box edge.
-  const markerEndId = resolveMarkerId(svgEl, 'arrowhead');
-  const tipOvershoot = markerTipOvershoot(svgEl, markerEndId);
 
   // Update the relevant endpoint and recompute tangent.
   let srcPt = { x: sx, y: sy };
@@ -385,23 +381,12 @@ function applyBundleAnchorLive(
     }
   }
 
-  // Apply tip overshoot: pull the target endpoint back along its tangent so
-  // the arrowhead tip lands on the box edge (same as useClusterCollapse does).
-  const bundleDir = path.getAttribute('data-mf-bundle-direction') ?? '';
-  const tgtDrawPt = tipOvershoot > 0
-    ? { x: tgtPt.x + tgtTangent.x * tipOvershoot, y: tgtPt.y + tgtTangent.y * tipOvershoot }
-    : tgtPt;
-  // For bidir edges, also pull the src endpoint back.
-  const srcDrawPt = (tipOvershoot > 0 && bundleDir === 'bidir')
-    ? { x: srcPt.x + srcTangent.x * tipOvershoot, y: srcPt.y + srcTangent.y * tipOvershoot }
-    : srcPt;
-
   // Rebuild path: pass through any stored waypoint using the C1-continuous
   // algorithm, or fall back to a direct S-curve when no waypoints exist.
   const { edgeWaypoints } = useDiagramStore.getState();
   const wp = edgeWaypoints[path.getAttribute('data-edge-id') ?? '']?.[0];
   const waypts = wp ? [wp] : [];
-  const newD = waypointBezierPath(srcDrawPt, waypts, tgtDrawPt, zeroBBox, zeroBBox, srcTangent, tgtTangent);
+  const newD = waypointBezierPath(srcPt, waypts, tgtPt, zeroBBox, zeroBBox, srcTangent, tgtTangent);
   path.setAttribute('d', newD);
 }
 
@@ -443,8 +428,9 @@ function commitAnchorDrop(ctx: AnchorDragCtx): void {
     if (nodeId) {
       const nodeG = svgEl.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nodeId)}"]`);
       rect = nodeG ? groupBBox(nodeG) : null;
-    } else if (clusterId) {
-      const clusterG = svgEl.querySelector<SVGGElement>(`g[id="${cssEscape(clusterId)}"]`);
+    }
+    if ((!nodeId || !rect) && clusterId) {
+      const clusterG = svgEl.querySelector<SVGGElement>(`g.cluster[id="${cssEscape(clusterId)}"]`);
       rect = clusterG ? clusterElementBBox(clusterG as SVGGElement) : null;
     }
     if (rect) {

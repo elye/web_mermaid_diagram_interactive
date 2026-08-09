@@ -332,6 +332,28 @@ g.cluster:hover > rect {
   transition: opacity 150ms ease;
 }
 
+/* Source collapsed cluster: upstream neighbour of the selection (warm amber). */
+.mf-cluster--source > rect {
+  filter:
+    drop-shadow(0 0 1.5px #f59e0b)
+    drop-shadow(0 0 5px rgba(245, 158, 11, 0.55));
+  opacity: 1 !important;
+}
+
+/* Sink collapsed cluster: downstream neighbour of the selection (violet). */
+.mf-cluster--sink > rect {
+  filter:
+    drop-shadow(0 0 1.5px #a78bfa)
+    drop-shadow(0 0 5px rgba(167, 139, 250, 0.55));
+  opacity: 1 !important;
+}
+
+/* Dim unrelated collapsed cluster boxes when a selection is active. */
+.mf-canvas--has-selection g.cluster.mf-cluster--collapsed:not(.mf-cluster--selected):not(.mf-cluster--source):not(.mf-cluster--sink) {
+  opacity: 0.35;
+  transition: opacity 150ms ease;
+}
+
 /* Connecting edge: the edge linking a selected node to a source/sink. */
 .mf-edge--connected {
   opacity: 1 !important;
