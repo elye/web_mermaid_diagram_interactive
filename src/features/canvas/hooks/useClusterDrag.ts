@@ -130,6 +130,11 @@ export function useClusterDrag(
           anchorOverrides: new Map(Object.entries(edgeAnchorOverrides)),
         });
         resizeClusters(svg, source, collapsedClusters);
+        // If any other clusters are collapsed, rebuild bundle overlay edges so
+        // they stay anchored to the nodes we just moved.
+        if (collapsedClusters.size > 0) {
+          rebuildBundleOverlays(svg);
+        }
       }
       expandViewBoxToFit(svg);
     };
