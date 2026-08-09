@@ -76,9 +76,10 @@ export function useClusterCollapse(
         }
         if (orx) rect.setAttribute('rx', orx); else rect.removeAttribute('rx');
         if (ory) rect.setAttribute('ry', ory); else rect.removeAttribute('ry');
-        // Restore rect inline style overrides we added
-        rect.style.removeProperty('fill');
-        rect.style.removeProperty('stroke');
+        // Only remove stroke-width — fill and stroke were applied by DiagramCanvas
+        // via setImportantStyle and must NOT be cleared here. Removing them
+        // would wipe the user's color overrides until DiagramCanvas re-runs its
+        // own effect (which only happens when its deps change, e.g. on click).
         rect.style.removeProperty('stroke-width');
       }
       // Restore cluster-label transform
