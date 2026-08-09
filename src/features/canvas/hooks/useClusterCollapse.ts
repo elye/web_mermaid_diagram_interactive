@@ -18,7 +18,7 @@ import { collectClusterElements, clusterElementBBox } from '../services/cluster/
 import { computeCollapseState, bundleLabel } from '../services/collapseUtils';
 import { resizeClusters } from '../services/clusterResize';
 import { cssEscape } from '../services/svg';
-import { anchorOn, bezierPath } from '../services/routing';
+import { anchorOn, bezierPath, outwardNormal, centerOf } from '../services/routing';
 import type { BBox } from '@/shared/types/diagram';
 
 export const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -288,30 +288,29 @@ export function useClusterCollapse(
         collapsedBBoxes.get(bundle.externalNodeId) ?? extNodeBBoxes.get(bundle.externalNodeId);
       if (!clusterBBox || !extBBox) continue;
 
-      const clusterCenter = {
-        x: clusterBBox.x + clusterBBox.width / 2,
-        y: clusterBBox.y + clusterBBox.height / 2,
-      };
-      const extCenter = {
-        x: extBBox.x + extBBox.width / 2,
-        y: extBBox.y + extBBox.height / 2,
-      };
-
       // Anchor using the same heuristic as routeAllEdges.
       // in:    external node  ->  cluster
       // out:   cluster  ->  external node
       // bidir: cluster <-> external node (cluster drawn as source)
-      let srcAnchor: { x: number; y: number };
-      let tgtAnchor: { x: number; y: number };
+      let srcBox: BBox;
+      let tgtBox: BBox;
       if (bundle.direction === 'in') {
-        srcAnchor = anchorOn(extBBox, clusterCenter);
-        tgtAnchor = anchorOn(clusterBBox, extCenter);
+        srcBox = extBBox;
+        tgtBox = clusterBBox;
       } else {
-        srcAnchor = anchorOn(clusterBBox, extCenter);
-        tgtAnchor = anchorOn(extBBox, clusterCenter);
+        srcBox = clusterBBox;
+        tgtBox = extBBox;
       }
+      const srcFacing = centerOf(tgtBox);
+      const tgtFacing = centerOf(srcBox);
+      const srcAnchor = anchorOn(srcBox, srcFacing);
+      const tgtAnchor = anchorOn(tgtBox, tgtFacing);
+      // Outward normals so the curve exits each box perpendicularly —
+      // the same as routeSingleEdge in routeEdges.ts.
+      const srcTangent = outwardNormal(srcBox, srcAnchor);
+      const tgtTangent = outwardNormal(tgtBox, tgtAnchor);
 
-      const d = bezierPath(srcAnchor, tgtAnchor);
+      const d = bezierPath(srcAnchor, tgtAnchor, srcTangent, tgtTangent);
 
       const path = document.createElementNS(SVG_NS, 'path');
       path.setAttribute('d', d);
@@ -331,8 +330,10 @@ export function useClusterCollapse(
 
       const label = bundleLabel(bundle.count);
       if (label) {
-        const midX = (srcAnchor.x + tgtAnchor.x) / 2;
-        const midY = (srcAnchor.y + tgtAnchor.y) / 2;
+        // Use the bezier midpoint (t=0.5) rather than the straight anchor
+        // average, so the label sits on the curve regardless of its shape.
+        const midX = bezierMidpoint(srcAnchor, tgtAnchor, srcTangent, tgtTangent).x;
+        const midY = bezierMidpoint(srcAnchor, tgtAnchor, srcTangent, tgtTangent).y;
         const text = document.createElementNS(SVG_NS, 'text');
         text.setAttribute('x', String(midX));
         text.setAttribute('y', String(midY - 6));
@@ -407,20 +408,21 @@ export function rebuildBundleOverlays(svgEl: SVGSVGElement): void {
     const extBBox = collapsedBBoxes.get(bundle.externalNodeId) ?? extNodeBBoxes.get(bundle.externalNodeId);
     if (!clusterBBox || !extBBox) continue;
 
-    const clusterCenter = { x: clusterBBox.x + clusterBBox.width / 2, y: clusterBBox.y + clusterBBox.height / 2 };
-    const extCenter = { x: extBBox.x + extBBox.width / 2, y: extBBox.y + extBBox.height / 2 };
-
-    let srcAnchor: { x: number; y: number };
-    let tgtAnchor: { x: number; y: number };
+    let srcBox: BBox;
+    let tgtBox: BBox;
     if (bundle.direction === 'in') {
-      srcAnchor = anchorOn(extBBox, clusterCenter);
-      tgtAnchor = anchorOn(clusterBBox, extCenter);
+      srcBox = extBBox;
+      tgtBox = clusterBBox;
     } else {
-      srcAnchor = anchorOn(clusterBBox, extCenter);
-      tgtAnchor = anchorOn(extBBox, clusterCenter);
+      srcBox = clusterBBox;
+      tgtBox = extBBox;
     }
+    const srcAnchor = anchorOn(srcBox, centerOf(tgtBox));
+    const tgtAnchor = anchorOn(tgtBox, centerOf(srcBox));
+    const srcTangent = outwardNormal(srcBox, srcAnchor);
+    const tgtTangent = outwardNormal(tgtBox, tgtAnchor);
 
-    const d = bezierPath(srcAnchor, tgtAnchor);
+    const d = bezierPath(srcAnchor, tgtAnchor, srcTangent, tgtTangent);
     const path = document.createElementNS(SVG_NS, 'path');
     path.setAttribute('d', d);
     path.setAttribute('class', `mf-bundle-edge mf-bundle-edge--${bundle.direction}`);
@@ -434,11 +436,10 @@ export function rebuildBundleOverlays(svgEl: SVGSVGElement): void {
 
     const label = bundleLabel(bundle.count);
     if (label) {
-      const midX = (srcAnchor.x + tgtAnchor.x) / 2;
-      const midY = (srcAnchor.y + tgtAnchor.y) / 2;
+      const mid = bezierMidpoint(srcAnchor, tgtAnchor, srcTangent, tgtTangent);
       const text = document.createElementNS(SVG_NS, 'text');
-      text.setAttribute('x', String(midX));
-      text.setAttribute('y', String(midY - 6));
+      text.setAttribute('x', String(mid.x));
+      text.setAttribute('y', String(mid.y - 6));
       text.setAttribute('class', 'mf-bundle-label');
       text.setAttribute('text-anchor', 'middle');
       text.setAttribute('pointer-events', 'none');
@@ -451,6 +452,35 @@ export function rebuildBundleOverlays(svgEl: SVGSVGElement): void {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Evaluate the same cubic Bézier that `bezierPath` produces at t = 0.5.
+ *
+ * Matches the control-arm computation from `paths.ts` so the returned
+ * point sits exactly on the rendered curve — used to place count labels.
+ */
+function bezierMidpoint(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  srcTangent: { x: number; y: number },
+  tgtTangent: { x: number; y: number },
+): { x: number; y: number } {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  // Mirrors bendFor() from paths/pathFormat.ts: clamp control-arm to [40, 200]
+  // and scale it to 40% of the distance.
+  const bend = Math.max(40, Math.min(200, dist * 0.4));
+  const c1 = { x: a.x + srcTangent.x * bend, y: a.y + srcTangent.y * bend };
+  const c2 = { x: b.x + tgtTangent.x * bend, y: b.y + tgtTangent.y * bend };
+  // De Casteljau at t = 0.5
+  const t = 0.5;
+  const mt = 1 - t;
+  return {
+    x: mt * mt * mt * a.x + 3 * mt * mt * t * c1.x + 3 * mt * t * t * c2.x + t * t * t * b.x,
+    y: mt * mt * mt * a.y + 3 * mt * mt * t * c1.y + 3 * mt * t * t * c2.y + t * t * t * b.y,
+  };
+}
 
 /**
  * Return the bounding box of a `g[data-node-id]` in SVG root coordinate space.
