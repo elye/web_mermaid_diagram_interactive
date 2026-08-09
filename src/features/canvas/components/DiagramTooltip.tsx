@@ -8,6 +8,7 @@
  *
  * Rendered in a React portal so it sits above all canvas transforms.
  */
+import React from 'react';
 import { createPortal } from 'react-dom';
 import type { EdgeMeta, NodeMeta } from '@/shared/types/diagram';
 
@@ -88,14 +89,34 @@ interface Props {
 
 export function DiagramTooltip({ info }: Props) {
   const OFFSET = 12;
-
-  const style: React.CSSProperties = {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const [pos, setPos] = React.useState<React.CSSProperties>({
     left: info.x + OFFSET,
     top: info.y + OFFSET,
-  };
+    visibility: 'hidden',
+  });
+
+  React.useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const { width, height } = el.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const MARGIN = 8;
+    let left = info.x + OFFSET;
+    let top = info.y + OFFSET;
+    // Flip left if overflowing right edge
+    if (left + width + MARGIN > vw) left = info.x - width - OFFSET;
+    // Flip up if overflowing bottom edge
+    if (top + height + MARGIN > vh) top = info.y - height - OFFSET;
+    // Clamp to viewport
+    left = Math.max(MARGIN, Math.min(left, vw - width - MARGIN));
+    top  = Math.max(MARGIN, Math.min(top,  vh - height - MARGIN));
+    setPos({ left, top, visibility: 'visible' });
+  }, [info.x, info.y]);
 
   return createPortal(
-    <div className="mf-tooltip" style={style} role="tooltip">
+    <div ref={ref} className="mf-tooltip" style={pos} role="tooltip">
       {info.kind === 'node' && <NodeTooltipContent info={info} />}
       {info.kind === 'edge' && <EdgeTooltipContent info={info} />}
       {info.kind === 'collapsed-cluster' && <CollapsedClusterTooltipContent info={info} />}
