@@ -15,6 +15,31 @@
 import { create } from 'zustand';
 import { DEFAULT_MERMAID_SOURCE } from '@/shared/constants/defaults';
 import type { NodeMeta, EdgeMeta, PositionOverride, EdgeWaypoint, EdgeAnchorOverride } from '@/shared/types/diagram';
+import { parseSubgraphMembership } from '@/features/canvas/services/cluster/subgraphParser';
+
+/**
+ * Collect all nested subgraph ids that are direct or indirect children of
+ * `clusterId` in the membership map (breadth-first).
+ */
+function collectNestedSubclusters(
+  clusterId: string,
+  membership: Map<string, Set<string>>,
+): string[] {
+  const result: string[] = [];
+  const queue = [clusterId];
+  while (queue.length) {
+    const current = queue.shift()!;
+    const members = membership.get(current);
+    if (!members) continue;
+    for (const m of members) {
+      if (membership.has(m)) {
+        result.push(m);
+        queue.push(m);
+      }
+    }
+  }
+  return result;
+}
 
 export interface DiagramState {
   source: string;
@@ -30,6 +55,16 @@ export interface DiagramState {
    * Allows the user to pin arrow attachment points to a specific side of the node.
    */
   edgeAnchorOverrides: Record<string, { source?: EdgeAnchorOverride; target?: EdgeAnchorOverride }>;
+  /**
+   * Ids of subgraph clusters currently rendered in collapsed form.
+   *
+   * Collapse is a **view-state** toggle (like selection or zoom) — it does
+   * NOT change the semantic graph (nodes / edges / membership) and is
+   * intentionally excluded from undo/redo and file persistence. The rendered
+   * effect is projected from this set by `useClusterCollapse` and the pure
+   * `computeCollapseState` service.
+   */
+  collapsedClusters: Set<string>;
   renderError: string | null;
 
   setSource: (src: string) => void;
@@ -41,6 +76,14 @@ export interface DiagramState {
   clearEdgeWaypoints: (edgeId?: string) => void;
   setEdgeAnchorOverride: (edgeId: string, role: 'source' | 'target', override: EdgeAnchorOverride | null) => void;
   clearEdgeAnchorOverrides: (edgeId?: string) => void;
+  /** Toggle a cluster's collapse state (view-only; not tracked by history). */
+  toggleClusterCollapse: (clusterId: string) => void;
+  /** Explicitly set (or clear) a cluster's collapse state. */
+  setClusterCollapsed: (clusterId: string, collapsed: boolean) => void;
+  /** Expand every currently-collapsed cluster. */
+  expandAllClusters: () => void;
+  /** Expand a cluster and all of its collapsed descendants. */
+  expandClusterAndDescendants: (clusterId: string) => void;
   deleteNodes: (ids: string[]) => void;
   hydrate: (patch: Partial<DiagramState>) => void;
 }
@@ -53,9 +96,18 @@ export const useDiagramStore = create<DiagramState>((set) => ({
   positionOverrides: {},
   edgeWaypoints: {},
   edgeAnchorOverrides: {},
+  collapsedClusters: new Set<string>(),
   renderError: null,
 
-  setSource: (src) => set({ source: src, renderError: null }),
+  setSource: (src) =>
+    set((s) => ({
+      source: src,
+      renderError: null,
+      // Collapse state references cluster ids that may not exist in the new
+      // source — clear it so we never carry stale ids across an edit. The
+      // user can re-collapse after the new render lands.
+      collapsedClusters: s.collapsedClusters.size === 0 ? s.collapsedClusters : new Set<string>(),
+    })),
   setRendered: ({ svg, nodes, edges }) => set({ svg, nodes, edges, renderError: null }),
   setRenderError: (err) => set({ renderError: err }),
   setPositionOverride: (id, p) =>
@@ -91,6 +143,57 @@ export const useDiagramStore = create<DiagramState>((set) => ({
       const next = { ...s.edgeAnchorOverrides };
       delete next[edgeId];
       return { edgeAnchorOverrides: next };
+    }),
+  toggleClusterCollapse: (clusterId) =>
+    set((s) => {
+      const next = new Set(s.collapsedClusters);
+      const membership = parseSubgraphMembership(s.source);
+      if (next.has(clusterId)) {
+        // Expanding: only remove this cluster itself.
+        // Nested sub-clusters remain collapsed so the user expands level by
+        // level — clicking Outer reveals Inner as a 120×40 collapsed box.
+        next.delete(clusterId);
+      } else {
+        // Collapsing: add this cluster and all nested sub-clusters so that
+        // everything inside is hidden under the single collapsed box.
+        const nested = collectNestedSubclusters(clusterId, membership);
+        next.add(clusterId);
+        for (const id of nested) next.add(id);
+      }
+      // Clear bundle edgeWaypoints for this cluster — they become stale when
+      // the collapse state changes (new bundles may appear or disappear).
+      const nextEdgeWaypoints: Record<string, EdgeWaypoint[]> = {};
+      for (const [k, v] of Object.entries(s.edgeWaypoints)) {
+        if (!k.startsWith(`${clusterId}::`)) nextEdgeWaypoints[k] = v;
+      }
+      return { collapsedClusters: next, edgeWaypoints: nextEdgeWaypoints };
+    }),
+  setClusterCollapsed: (clusterId, collapsed) =>
+    set((s) => {
+      const alreadyCollapsed = s.collapsedClusters.has(clusterId);
+      if (alreadyCollapsed === collapsed) return {};
+      const next = new Set(s.collapsedClusters);
+      const membership = parseSubgraphMembership(s.source);
+      if (collapsed) {
+        // Collapsing: add this cluster and all its nested sub-clusters.
+        const nested = collectNestedSubclusters(clusterId, membership);
+        next.add(clusterId);
+        for (const id of nested) next.add(id);
+      } else {
+        // Expanding: only remove this cluster itself (single-level).
+        next.delete(clusterId);
+      }
+      return { collapsedClusters: next };
+    }),
+  expandAllClusters: () =>
+    set((s) => (s.collapsedClusters.size === 0 ? {} : { collapsedClusters: new Set<string>() })),
+  expandClusterAndDescendants: (clusterId) =>
+    set((s) => {
+      const membership = parseSubgraphMembership(s.source);
+      const toRemove = new Set([clusterId, ...collectNestedSubclusters(clusterId, membership)]);
+      const next = new Set(s.collapsedClusters);
+      for (const id of toRemove) next.delete(id);
+      return next.size === s.collapsedClusters.size ? {} : { collapsedClusters: next };
     }),
   deleteNodes: (ids) =>
     set((s) => ({

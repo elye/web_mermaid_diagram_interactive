@@ -31,7 +31,11 @@ import { useStyleStore } from '@/stores/styleStore';
 import { useHistoryStore } from '@/stores/historyStore';
 import { routeAllEdges, expandViewBoxToFit } from '../services/edgeRouter';
 import { groupBBox } from '../services/svg';
-import { snapToPerimeter } from '../services/routing/anchors';
+import { snapToPerimeter, anchorOnSide, outwardNormal } from '../services/routing/anchors';
+import { clusterElementBBox } from '../services/cluster/clusterElements';
+import { waypointBezierPath } from '../services/routing/bezierChain';
+
+import type { BBox } from '@/shared/types/diagram';
 import { HANDLE_CLASS, HANDLES_GROUP_CLASS, injectEdgeHandles } from './edgeHandles';
 import { buildLineStyleMap, cssEscape, svgPoint } from './edgeDragUtils';
 
@@ -99,6 +103,7 @@ export function useEdgeDrag(svgHostRef: React.RefObject<HTMLElement>, deps?: unk
               svgEl,
               role: handle.getAttribute('data-anchor-role') as 'source' | 'target',
               nodeId: handle.getAttribute('data-node-id') ?? '',
+              clusterId: handle.getAttribute('data-cluster-id') ?? '',
               pointerId: e.pointerId,
               committed: false,
             };
@@ -183,6 +188,21 @@ function applyWaypointMove(ctx: WaypointDragCtx, pt: DOMPoint): void {
   const waypointMap = new Map(Object.entries(edgeWaypoints));
   waypointMap.set(edgeId, existing);
 
+  // If this is a bundle edge (has data-mf-bundle-cluster), redraw it directly
+  // using the C1-continuous waypoint bezier — it's not part of routeAllEdges.
+  const bundlePath = svgEl.querySelector<SVGPathElement>(
+    `path[data-edge-id="${cssEscape(edgeId)}"][data-mf-bundle-cluster]`,
+  );
+  if (bundlePath) {
+    applyBundleWaypointLive(bundlePath, { x: pt.x, y: pt.y });
+    // Keep the wide hit path in sync so it remains clickable at its new position.
+    const hitPath = svgEl.querySelector<SVGPathElement>(
+      `.mf-edge-hit[data-hit-edge-id="${cssEscape(edgeId)}"]`,
+    );
+    if (hitPath) hitPath.setAttribute('d', bundlePath.getAttribute('d') ?? '');
+    return; // skip routeAllEdges for bundle edges
+  }
+
   // Auto-flow: while the user is shaping the curve via its waypoint,
   // drop any prior anchor override on THIS edge so the router re-derives
   // the anchor from geometry (facing the new waypoint direction).
@@ -196,8 +216,70 @@ function applyWaypointMove(ctx: WaypointDragCtx, pt: DOMPoint): void {
   });
 }
 
+/**
+ * Redraw a bundle edge path so it passes through `wp`, using the same
+ * C1-continuous chained Bézier algorithm as regular edges (waypointBezierPath).
+ *
+ * Reads src/tgt anchor points and their outward tangents from the data
+ * attributes stored by useClusterCollapse when the path was first drawn.
+ * Falls back to extracting src/tgt from the `d` attribute (no tangents)
+ * if those attributes are absent.
+ */
+function applyBundleWaypointLive(path: SVGPathElement, wp: { x: number; y: number }): void {
+  const zeroBBox: BBox = { x: 0, y: 0, width: 0, height: 0 };
+
+  // Prefer the stored anchor points (exact values, not rounded path coords).
+  const sx = path.getAttribute('data-mf-src-x');
+  const sy = path.getAttribute('data-mf-src-y');
+  const tx = path.getAttribute('data-mf-tgt-x');
+  const ty = path.getAttribute('data-mf-tgt-y');
+  const stx = path.getAttribute('data-mf-src-tx');
+  const sty = path.getAttribute('data-mf-src-ty');
+  const ttx = path.getAttribute('data-mf-tgt-tx');
+  const tty = path.getAttribute('data-mf-tgt-ty');
+
+  let src: { x: number; y: number };
+  let tgt: { x: number; y: number };
+  let srcTangent: { x: number; y: number } | undefined;
+  let tgtTangent: { x: number; y: number } | undefined;
+
+  if (sx !== null && sy !== null && tx !== null && ty !== null) {
+    src = { x: Number(sx), y: Number(sy) };
+    tgt = { x: Number(tx), y: Number(ty) };
+    if (stx !== null && sty !== null) srcTangent = { x: Number(stx), y: Number(sty) };
+    if (ttx !== null && tty !== null) tgtTangent = { x: Number(ttx), y: Number(tty) };
+  } else {
+    // Fallback: extract first/last coords from `d` attribute.
+    const d = path.getAttribute('d') ?? '';
+    const nums = (d.match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi) ?? []).map(Number);
+    if (nums.length < 4) return;
+    src = { x: nums[0], y: nums[1] };
+    tgt = { x: nums[nums.length - 2], y: nums[nums.length - 1] };
+  }
+
+  const newD = waypointBezierPath(src, [wp], tgt, zeroBBox, zeroBBox, srcTangent, tgtTangent);
+  path.setAttribute('d', newD);
+}
+
 function applyAnchorMove(ctx: AnchorDragCtx, pt: DOMPoint): void {
-  const { svgEl, edgeId, role, nodeId, handle } = ctx;
+  const { svgEl, edgeId, role, nodeId, clusterId, handle } = ctx;
+
+  // Bundle-edge anchor: redraw the bundle path with the updated endpoint.
+  const bundlePath = svgEl.querySelector<SVGPathElement>(
+    `path[data-edge-id="${cssEscape(edgeId)}"][data-mf-bundle-cluster]`,
+  );
+  if (bundlePath) {
+    applyBundleAnchorLive(bundlePath, svgEl, role, nodeId, clusterId, pt);
+    // Sync hit path.
+    const hitPath = svgEl.querySelector<SVGPathElement>(
+      `.mf-edge-hit[data-hit-edge-id="${cssEscape(edgeId)}"]`,
+    );
+    if (hitPath) hitPath.setAttribute('d', bundlePath.getAttribute('d') ?? '');
+    handle.setAttribute('cx', String(pt.x));
+    handle.setAttribute('cy', String(pt.y));
+    return;
+  }
+
   const nodeG = svgEl.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nodeId)}"]`);
   if (!nodeG) return;
   const rect = groupBBox(nodeG);
@@ -225,6 +307,89 @@ function applyAnchorMove(ctx: AnchorDragCtx, pt: DOMPoint): void {
   handle.setAttribute('cy', String(pt.y));
 }
 
+/**
+ * Redraw a bundle edge path live during anchor-handle drag.
+ * Updates the anchor endpoint (`src` or `tgt`) on the path to a new point
+ * snapped to the perimeter of the relevant node/cluster box, then redraws.
+ */
+function applyBundleAnchorLive(
+  path: SVGPathElement,
+  svgEl: SVGSVGElement,
+  role: 'source' | 'target',
+  nodeId: string,
+  clusterId: string,
+  pt: DOMPoint,
+): void {
+  const zeroBBox: BBox = { x: 0, y: 0, width: 0, height: 0 };
+
+  // Read all current anchor/tangent data.
+  const sx = Number(path.getAttribute('data-mf-src-x') ?? '0');
+  const sy = Number(path.getAttribute('data-mf-src-y') ?? '0');
+  const tx = Number(path.getAttribute('data-mf-tgt-x') ?? '0');
+  const ty = Number(path.getAttribute('data-mf-tgt-y') ?? '0');
+  const stx = Number(path.getAttribute('data-mf-src-tx') ?? '0');
+  const sty = Number(path.getAttribute('data-mf-src-ty') ?? '0');
+  const ttx = Number(path.getAttribute('data-mf-tgt-tx') ?? '0');
+  const tty = Number(path.getAttribute('data-mf-tgt-ty') ?? '0');
+
+  // Snap the cursor to the correct element's perimeter and recompute tangent.
+  let newPt = { x: pt.x, y: pt.y };
+  let newTangent: { x: number; y: number } | null = null;
+  if (nodeId) {
+    const nodeG = svgEl.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nodeId)}"]`);
+    const rect = nodeG ? groupBBox(nodeG) : null;
+    if (rect) {
+      const override = snapToPerimeter(rect, { x: pt.x, y: pt.y });
+      newPt = anchorOnSide(rect, override);
+      newTangent = outwardNormal(rect, newPt);
+    }
+  }
+  if ((!nodeId || !svgEl.querySelector(`g[data-node-id="${cssEscape(nodeId)}"]`)) && clusterId) {
+    const clusterG = svgEl.querySelector<SVGGElement>(`g.cluster[id="${cssEscape(clusterId)}"]`);
+    const rect = clusterG ? clusterElementBBox(clusterG as SVGGElement) : null;
+    if (rect) {
+      const override = snapToPerimeter(rect, { x: pt.x, y: pt.y });
+      newPt = anchorOnSide(rect, override);
+      newTangent = outwardNormal(rect, newPt);
+    }
+  }
+
+  // Update the relevant endpoint and recompute tangent.
+  let srcPt = { x: sx, y: sy };
+  let tgtPt = { x: tx, y: ty };
+  let srcTangent = { x: stx, y: sty };
+  let tgtTangent = { x: ttx, y: tty };
+
+  if (role === 'source') {
+    srcPt = newPt;
+    if (newTangent) srcTangent = newTangent;
+    // Update the data attributes so future drags use the new position/tangent.
+    path.setAttribute('data-mf-src-x', String(newPt.x));
+    path.setAttribute('data-mf-src-y', String(newPt.y));
+    if (newTangent) {
+      path.setAttribute('data-mf-src-tx', String(newTangent.x));
+      path.setAttribute('data-mf-src-ty', String(newTangent.y));
+    }
+  } else {
+    tgtPt = newPt;
+    if (newTangent) tgtTangent = newTangent;
+    path.setAttribute('data-mf-tgt-x', String(newPt.x));
+    path.setAttribute('data-mf-tgt-y', String(newPt.y));
+    if (newTangent) {
+      path.setAttribute('data-mf-tgt-tx', String(newTangent.x));
+      path.setAttribute('data-mf-tgt-ty', String(newTangent.y));
+    }
+  }
+
+  // Rebuild path: pass through any stored waypoint using the C1-continuous
+  // algorithm, or fall back to a direct S-curve when no waypoints exist.
+  const { edgeWaypoints } = useDiagramStore.getState();
+  const wp = edgeWaypoints[path.getAttribute('data-edge-id') ?? '']?.[0];
+  const waypts = wp ? [wp] : [];
+  const newD = waypointBezierPath(srcPt, waypts, tgtPt, zeroBBox, zeroBBox, srcTangent, tgtTangent);
+  path.setAttribute('d', newD);
+}
+
 // ─── Drop commits (on pointerup) ─────────────────────────────────────────
 
 function commitWaypointDrop(ctx: WaypointDragCtx): void {
@@ -243,7 +408,38 @@ function commitWaypointDrop(ctx: WaypointDragCtx): void {
 }
 
 function commitAnchorDrop(ctx: AnchorDragCtx): void {
-  const { edgeId, svgEl, handle, role, nodeId } = ctx;
+  const { edgeId, svgEl, handle, role, nodeId, clusterId } = ctx;
+
+  // Bundle edge anchor drop: read the final endpoint coords directly from the
+  // path attributes (updated live by applyBundleAnchorLive) and persist them
+  // as an anchor override so rebuildBundleOverlays can restore the position.
+  const bundlePath = svgEl.querySelector<SVGPathElement>(
+    `path[data-edge-id="${cssEscape(edgeId)}"][data-mf-bundle-cluster]`,
+  );
+  if (bundlePath) {
+    const finalX = Number(role === 'source'
+      ? bundlePath.getAttribute('data-mf-src-x')
+      : bundlePath.getAttribute('data-mf-tgt-x'));
+    const finalY = Number(role === 'source'
+      ? bundlePath.getAttribute('data-mf-src-y')
+      : bundlePath.getAttribute('data-mf-tgt-y'));
+    // Determine the reference element to snap the anchor.
+    let rect: ReturnType<typeof groupBBox> = null;
+    if (nodeId) {
+      const nodeG = svgEl.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nodeId)}"]`);
+      rect = nodeG ? groupBBox(nodeG) : null;
+    }
+    if ((!nodeId || !rect) && clusterId) {
+      const clusterG = svgEl.querySelector<SVGGElement>(`g.cluster[id="${cssEscape(clusterId)}"]`);
+      rect = clusterG ? clusterElementBBox(clusterG as SVGGElement) : null;
+    }
+    if (rect) {
+      const override = snapToPerimeter(rect, { x: finalX, y: finalY });
+      useDiagramStore.getState().setEdgeAnchorOverride(edgeId, role, override);
+    }
+    return;
+  }
+
   const nodeG = svgEl.querySelector<SVGGElement>(`g[data-node-id="${cssEscape(nodeId)}"]`);
   const rect = nodeG ? groupBBox(nodeG) : null;
   if (!rect) return;
@@ -278,6 +474,8 @@ interface AnchorDragCtx {
   svgEl: SVGSVGElement;
   role: 'source' | 'target';
   nodeId: string;
+  /** For bundle-edge cluster-side anchors: the cluster ID of the collapsed box. */
+  clusterId: string;
   pointerId: number;
   committed: boolean;
 }

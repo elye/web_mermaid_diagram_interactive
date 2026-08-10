@@ -70,6 +70,8 @@ export function Toolbar() {
     // Clear edge waypoints and anchor overrides via diagramStore directly.
     useDiagramStore.getState().clearEdgeWaypoints();
     useDiagramStore.getState().clearEdgeAnchorOverrides();
+    // Expand all collapsed subgraphs.
+    useDiagramStore.getState().expandAllClusters();
     pushToast({ kind: 'success', message: 'All styles and positions reset.' });
   };
 

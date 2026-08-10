@@ -8,11 +8,12 @@
  * Edge panel  : stroke color, stroke width, dash pattern, line style,
  *               reset-to-origin button.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSelectionStore } from '@/stores/selectionStore';
 import { useStyleStore } from '@/stores/styleStore';
 import { useHistoryStore } from '@/stores/historyStore';
 import { useDiagramStore } from '@/stores/diagramStore';
+import { parseSubgraphMembership, collectAllNodeIds } from '@/features/canvas/services/cluster';
 import type { StyleOverride, EdgeLineStyle } from '@/shared/types/diagram';
 
 // ─── Node Properties ──────────────────────────────────────────────────────────
@@ -350,6 +351,56 @@ function ClusterPropertiesPanelInner({ clusterId }: { clusterId: string }) {
   const commit = useHistoryStore((s) => s.commit);
   const commitCoalesced = useHistoryStore((s) => s.commitCoalesced);
 
+  // ── Collapse state ──
+  const source = useDiagramStore((s) => s.source);
+  const collapsedClusters = useDiagramStore((s) => s.collapsedClusters);
+  const toggleClusterCollapse = useDiagramStore((s) => s.toggleClusterCollapse);
+  const expandClusterAndDescendants = useDiagramStore((s) => s.expandClusterAndDescendants);
+  const isCollapsed = collapsedClusters.has(clusterId);
+  const memberCount = useMemo(() => {
+    const membership = parseSubgraphMembership(source);
+    return collectAllNodeIds(clusterId, membership).size;
+  }, [source, clusterId]);
+
+  const handleExpandClick = () => {
+    if (isCollapsed) {
+      const membership = parseSubgraphMembership(source);
+      const directMembers = membership.get(clusterId) ?? new Set<string>();
+      const hasNestedCollapsed = [...directMembers].some(
+        (m) => membership.has(m) && collapsedClusters.has(m),
+      );
+      if (hasNestedCollapsed) {
+        // Show the same dialog as the canvas toggle button.
+        document.querySelectorAll('dialog.mf-expand-dialog').forEach((el) => el.remove());
+        const dialog = document.createElement('dialog');
+        dialog.className = 'mf-expand-dialog';
+        dialog.innerHTML = `
+          <p class="mf-expand-dialog__title">Expand subgraph</p>
+          <p class="mf-expand-dialog__body">This subgraph contains nested collapsed subgraphs. How would you like to expand?</p>
+          <div class="mf-expand-dialog__actions">
+            <button class="mf-expand-dialog__btn" data-action="cancel">Cancel</button>
+            <button class="mf-expand-dialog__btn" data-action="one">First level only</button>
+            <button class="mf-expand-dialog__btn mf-expand-dialog__btn--primary" data-action="all">Expand all</button>
+          </div>`;
+        const close = () => { dialog.close(); dialog.remove(); };
+        dialog.addEventListener('click', (ev) => {
+          const action = (ev.target as HTMLElement).dataset.action;
+          if (action === 'cancel') { close(); }
+          else if (action === 'one') { close(); toggleClusterCollapse(clusterId); }
+          else if (action === 'all') { close(); expandClusterAndDescendants(clusterId); }
+          else {
+            const rect = dialog.getBoundingClientRect();
+            if (ev.clientX < rect.left || ev.clientX > rect.right || ev.clientY < rect.top || ev.clientY > rect.bottom) close();
+          }
+        });
+        document.body.appendChild(dialog);
+        dialog.showModal();
+        return;
+      }
+    }
+    toggleClusterCollapse(clusterId);
+  };
+
   const current = clusterStyles[clusterId] ?? {};
   const historyKey = `cluster:${clusterId}`;
 
@@ -384,6 +435,26 @@ function ClusterPropertiesPanelInner({ clusterId }: { clusterId: string }) {
         <h2 className="font-semibold">Subgraph</h2>
         <span className="text-xs text-muted">{clusterId}</span>
       </div>
+
+      {/* Collapse / Expand toggle — view-state only, not tracked by undo/redo. */}
+      <button
+        onClick={handleExpandClick}
+        className={
+          'mb-3 w-full rounded border px-2 py-1 text-xs ' +
+          (isCollapsed
+            ? 'border-accent bg-accent/10 text-accent hover:bg-accent/20'
+            : 'border-border hover:bg-surface-alt')
+        }
+        title={
+          isCollapsed
+            ? `Expand "${clusterId}" and show its ${memberCount} member node${memberCount === 1 ? '' : 's'}`
+            : `Collapse "${clusterId}" and hide its ${memberCount} member node${memberCount === 1 ? '' : 's'}`
+        }
+      >
+        {isCollapsed
+          ? `▶ Expand (${memberCount} node${memberCount === 1 ? '' : 's'})`
+          : `▼ Collapse (${memberCount} node${memberCount === 1 ? '' : 's'})`}
+      </button>
 
       <label className="mb-2 block">
         <span className="mb-1 block text-xs text-muted">Fill</span>

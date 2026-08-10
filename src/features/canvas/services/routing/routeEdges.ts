@@ -49,6 +49,13 @@ export function routeAllEdges(svg: SVGSVGElement, options: RouteOptions = {}): v
   if (rects.size === 0) return;
 
   svg.querySelectorAll<SVGPathElement>('path[data-edge-id]').forEach((path) => {
+    // Bundle overlay paths (collapsed-cluster summary arrows) are drawn and
+    // maintained by useClusterCollapse / rebuildBundleOverlays. They do NOT
+    // have data-edge-source / data-edge-target and should never be re-routed
+    // by the generic router (doing so would overwrite their geometry with a
+    // mis-inferred node-to-node route and cause visual glitches after drag).
+    if (path.hasAttribute('data-mf-bundle-cluster')) return;
+
     const id = path.getAttribute('data-edge-id') ?? '';
     const lineStyle = options.lineStyles?.get(id);
     const waypts = options.waypoints?.get(id);

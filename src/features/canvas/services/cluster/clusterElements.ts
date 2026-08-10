@@ -41,10 +41,14 @@ export function extractClusterUserId(rawId: string): string | null {
   return m ? m[1] : rawId || null;
 }
 
-/** Collect the current bbox of every `g[data-node-id]` in `svg`, keyed by node id. */
+/** Collect the current bbox of every visible `g[data-node-id]` in `svg`, keyed by node id.
+ * Hidden nodes (display:none) are excluded — they belong to a collapsed cluster and
+ * should not influence parent cluster resizing.
+ */
 export function collectNodeBBoxes(svg: SVGSVGElement): Map<string, BBox> {
   const out = new Map<string, BBox>();
   svg.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
+    if (g.style.display === 'none') return; // hidden by cluster collapse
     const id = g.getAttribute('data-node-id');
     if (!id) return;
     const bbox = groupBBox(g);
@@ -64,10 +68,14 @@ export function clusterElementBBox(g: SVGGElement): BBox | null {
   const w = Number(rect.getAttribute('width') ?? '0');
   const h = Number(rect.getAttribute('height') ?? '0');
   if (w === 0 && h === 0) return null;
-  // rect.x and rect.y are centred offsets (negative halves).
+  // Read rect.x / rect.y directly rather than assuming -w/2 / -h/2 centering,
+  // so the bbox is correct even when Mermaid uses non-centred coordinates.
+  // Fall back to -w/2 / -h/2 when the attributes are absent.
+  const rx = Number(rect.getAttribute('x') ?? String(-w / 2));
+  const ry = Number(rect.getAttribute('y') ?? String(-h / 2));
   return {
-    x: t.x - w / 2,
-    y: t.y - h / 2,
+    x: t.x + rx,
+    y: t.y + ry,
     width: w,
     height: h,
   };
