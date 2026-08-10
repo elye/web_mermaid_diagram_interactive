@@ -19,6 +19,8 @@ async function loadMermaid() {
       securityLevel: 'loose',
       theme: document.documentElement.classList.contains('dark') ? 'dark' : 'default',
       flowchart: { htmlLabels: true },
+      maxTextSize: 1000000,
+      maxEdges: 20000,
     });
     mermaidInitialised = true;
   }
