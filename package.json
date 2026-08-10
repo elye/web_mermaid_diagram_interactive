@@ -6,7 +6,7 @@
   "description": "Interactive Mermaid diagram editor with drag-and-drop, styling, and export.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write \"src/**/*.{ts,tsx,css,md}\"",

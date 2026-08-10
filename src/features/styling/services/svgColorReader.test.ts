@@ -35,7 +35,7 @@ beforeAll(() => {
   HTMLCanvasElement.prototype.getContext = vi.fn((_type: string) => {
     let r = 0, g = 0, b = 0;
     return {
-      fillStyle: '',
+      get fillStyle() { return ''; },
       set fillStyle(v: string) { [r, g, b] = parseCss(v); },
       fillRect: vi.fn(),
       getImageData: vi.fn(() => ({ data: [r, g, b, 255] })),

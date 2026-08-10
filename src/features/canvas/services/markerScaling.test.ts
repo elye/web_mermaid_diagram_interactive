@@ -73,13 +73,13 @@ describe('markerScaling', () => {
       expect(result).toContain('__scaled-');
       expect(result).toContain('150');
       
-      const scaledMarker = document.getElementById(result) as SVGMarkerElement;
+      const scaledMarker = document.getElementById(result) as unknown as SVGMarkerElement;
       expect(scaledMarker).toBeDefined();
     });
 
     it('should scale marker dimensions correctly', () => {
       const result = scaleMarker(originalMarker, 1.5, svg);
-      const scaledMarker = document.getElementById(result) as SVGMarkerElement;
+      const scaledMarker = document.getElementById(result) as unknown as SVGMarkerElement;
       
       // Original: 12x12, scaled to 1.5x: should be 18x18
       expect(parseFloat(scaledMarker.getAttribute('markerWidth')!)).toBe(18);
@@ -88,7 +88,7 @@ describe('markerScaling', () => {
 
     it('should set refX to 85% of scaled tip position', () => {
       const result = scaleMarker(originalMarker, 1.5, svg);
-      const scaledMarker = document.getElementById(result) as SVGMarkerElement;
+      const scaledMarker = document.getElementById(result) as unknown as SVGMarkerElement;
       
       // Scaled tip: 10 * 1.5 = 15, refX should be 15 * 0.85 = 12.75
       expect(parseFloat(scaledMarker.getAttribute('refX')!)).toBe(12.75);
@@ -96,7 +96,7 @@ describe('markerScaling', () => {
 
     it('should scale refY proportionally', () => {
       const result = scaleMarker(originalMarker, 1.5, svg);
-      const scaledMarker = document.getElementById(result) as SVGMarkerElement;
+      const scaledMarker = document.getElementById(result) as unknown as SVGMarkerElement;
       
       // Original refY: 5, scaled to 1.5x: should be 7.5
       expect(parseFloat(scaledMarker.getAttribute('refY')!)).toBe(7.5);
@@ -104,14 +104,14 @@ describe('markerScaling', () => {
 
     it('should remove viewBox from scaled marker', () => {
       const result = scaleMarker(originalMarker, 1.5, svg);
-      const scaledMarker = document.getElementById(result) as SVGMarkerElement;
+      const scaledMarker = document.getElementById(result) as unknown as SVGMarkerElement;
       
       expect(scaledMarker.getAttribute('viewBox')).toBeNull();
     });
 
     it('should scale path coordinates', () => {
       const result = scaleMarker(originalMarker, 1.5, svg);
-      const scaledMarker = document.getElementById(result) as SVGMarkerElement;
+      const scaledMarker = document.getElementById(result) as unknown as SVGMarkerElement;
       const scaledPath = scaledMarker.querySelector('path[d]');
       
       // Original path: M 0 0 L 10 5 L 0 10 z
@@ -128,7 +128,7 @@ describe('markerScaling', () => {
 
     it('should handle scale factor 0.5 correctly', () => {
       const result = scaleMarker(originalMarker, 0.5, svg);
-      const scaledMarker = document.getElementById(result) as SVGMarkerElement;
+      const scaledMarker = document.getElementById(result) as unknown as SVGMarkerElement;
       
       // Scaled to 0.5x: markerWidth should be 6, tip at 5, refX = 5 * 0.85 = 4.25
       expect(parseFloat(scaledMarker.getAttribute('markerWidth')!)).toBe(6);
@@ -137,7 +137,7 @@ describe('markerScaling', () => {
 
     it('should handle scale factor 2.5 correctly', () => {
       const result = scaleMarker(originalMarker, 2.5, svg);
-      const scaledMarker = document.getElementById(result) as SVGMarkerElement;
+      const scaledMarker = document.getElementById(result) as unknown as SVGMarkerElement;
       
       // Scaled to 2.5x: markerWidth should be 30, tip at 25, refX = 25 * 0.85 = 21.25
       expect(parseFloat(scaledMarker.getAttribute('markerWidth')!)).toBe(30);
@@ -347,7 +347,7 @@ describe('markerScaling', () => {
       
       for (const scale of scales) {
         const markerId = scaleMarker(originalMarker, scale, svg);
-        const marker = document.getElementById(markerId) as SVGMarkerElement;
+        const marker = document.getElementById(markerId) as unknown as SVGMarkerElement;
         
         if (marker) {
           const refX = parseFloat(marker.getAttribute('refX')!);

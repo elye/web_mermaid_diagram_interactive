@@ -31,7 +31,11 @@ function NodePropertiesPanel() {
 
   // When no user override is stored yet, read the actual rendered SVG color
   // so the pickers reflect what the node currently looks like.
-  const svgDefaults = readSvgNodeColors(firstId);
+  const [svgDefaults, setSvgDefaults] = useState(() => readSvgNodeColors(firstId));
+
+  useEffect(() => {
+    setSvgDefaults(readSvgNodeColors(firstId));
+  }, [firstId]);
 
   const fillValue      = current.fill      ?? svgDefaults.fill;
   const strokeValue    = current.stroke    ?? svgDefaults.stroke;

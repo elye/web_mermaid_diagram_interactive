@@ -156,7 +156,7 @@ export function scaleMarker(
   // Get the original marker ID (strip any __scaled- suffix to avoid chaining).
   const originalId = getOriginalMarkerId(marker.id);
   const originalMarker =
-    originalId === marker.id ? marker : (svg.ownerDocument?.getElementById(originalId) as SVGMarkerElement);
+    originalId === marker.id ? marker : (svg.ownerDocument?.getElementById(originalId) as unknown as SVGMarkerElement);
 
   if (!originalMarker) {
     // Shouldn't happen, but fallback to the current marker's original dimensions.
