@@ -17,7 +17,14 @@ into place, style them, and export.
 - **Per-node and per-edge styling** — properties panel with fill / stroke / 
   stroke width, plus one-click presets (Success / Warning / Error / Muted).
   Arrow markers scale proportionally with edge stroke width (1.0–5.0px+).
-  
+- **Subgraph collapse/expand** — collapse individual subgraphs to compact
+  120×40 boxes, or use **Collapse All / Expand All** buttons to toggle every
+  subgraph at once.
+- **Re-route (compact layout)** — after collapsing subgraphs, click ⟲ Route
+  to re-arrange visible elements into a compact grid that fits the viewport's
+  aspect ratio. Preserves reading order and re-routes all edges.
+- **Zoom to fit** — click ⊞ Fit to auto-zoom and center only the visible
+  content in the viewport (ignores hidden nodes inside collapsed clusters).
 - **Proprietary `.mermaidflow` format** — round-trip everything: source, node
   position overrides, style overrides, annotations, viewport, theme.
 - **Import / export** — drag-and-drop `.mmd` or `.mermaidflow`; export as SVG
@@ -84,6 +91,20 @@ See [`docs/file-format.md`](docs/file-format.md).
 | Mouse wheel       | Zoom (with ⌘ ideal) |
 | Drag background   | Pan                 |
 | Drag node         | Reposition node     |
+
+## 🖱️ Canvas controls
+
+The bottom-right corner of the canvas contains the control panel:
+
+| Group      | Button   | Action                                                                 |
+| ---------- | -------- | ---------------------------------------------------------------------- |
+| Subgraphs  | ▶ All    | Collapse all subgraphs into 120×40 summary boxes                       |
+| Subgraphs  | ▼ All    | Expand all subgraphs back to full detail                               |
+| View       | ⟲ Route  | Re-layout visible elements into a viewport-fitting grid, re-route edges |
+| View       | ⊞ Fit    | Zoom + pan to fit visible content tightly in the viewport              |
+| Focus      | ⇄ ← → ↔ ○ | Connectivity highlight mode (sources, sinks, both, bidir, none)     |
+| —          | 💬       | Toggle hover tooltips on/off                                           |
+| Zoom       | ＋ － ⟳  | Zoom in / out / reset (100%)                                          |
 
 ## 🧪 Testing
 

@@ -43,7 +43,6 @@ describe('diagramStore.collapseAllClusters', () => {
     useDiagramStore.setState({
       collapsedClusters: new Set(['Outer', 'Inner']),
     });
-    // Should not produce a new state object (early-out).
     const before = useDiagramStore.getState().collapsedClusters;
     useDiagramStore.getState().collapseAllClusters();
     const after = useDiagramStore.getState().collapsedClusters;
