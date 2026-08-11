@@ -21,6 +21,7 @@ export function buildFileObject(): MermaidFlowFile {
     edgeAnchorOverrides: d.edgeAnchorOverrides,
     clusterStyles: s.clusterStyles,
     annotations: s.annotations,
+    collapsedClusters: Array.from(d.collapsedClusters),
     theme: u.theme,
     viewportState: u.viewport,
     metadata: { createdAt: now, lastModified: now },

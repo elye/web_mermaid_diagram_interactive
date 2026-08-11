@@ -112,4 +112,55 @@ describe('autoSave', () => {
     const { autoSave } = await freshEnv();
     expect(autoSave.restoreAutoSave()).toBe(false);
   });
+
+  it('persists and restores collapsedClusters across page refresh', async () => {
+    // Session 1: collapse some clusters and flush.
+    const first = await freshEnv();
+    first.autoSave.startAutoSave();
+    first.useDiagramStore.getState().hydrate({
+      collapsedClusters: new Set(['subA', 'subB']),
+    });
+    first.autoSave.flushAutoSave();
+
+    // Verify serialised form uses a plain array.
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY)!);
+    expect(Array.isArray(raw.collapsedClusters)).toBe(true);
+    expect(raw.collapsedClusters.sort()).toEqual(['subA', 'subB']);
+
+    // Session 2: fresh module graph simulating page reload.
+    const second = await freshEnv();
+    expect(second.autoSave.restoreAutoSave()).toBe(true);
+
+    const restored = second.useDiagramStore.getState().collapsedClusters;
+    expect(restored).toBeInstanceOf(Set);
+    expect(restored.has('subA')).toBe(true);
+    expect(restored.has('subB')).toBe(true);
+    expect(restored.size).toBe(2);
+  });
+
+  it('defaults to empty collapsedClusters when field is missing from saved file', async () => {
+    // Simulate an older v1.2 save that predates the collapsedClusters field.
+    const oldSave = {
+      version: '1.2',
+      mermaidSource: 'flowchart TD\n  A --> B',
+      positionOverrides: {},
+      styleOverrides: {},
+      edgeStyles: {},
+      edgeWaypoints: {},
+      edgeAnchorOverrides: {},
+      clusterStyles: {},
+      annotations: [],
+      theme: 'system',
+      viewportState: { zoom: 1, panX: 0, panY: 0 },
+      metadata: { createdAt: '2025-01-01', lastModified: '2025-01-01' },
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(oldSave));
+
+    const { autoSave, useDiagramStore } = await freshEnv();
+    expect(autoSave.restoreAutoSave()).toBe(true);
+
+    const restored = useDiagramStore.getState().collapsedClusters;
+    expect(restored).toBeInstanceOf(Set);
+    expect(restored.size).toBe(0);
+  });
 });

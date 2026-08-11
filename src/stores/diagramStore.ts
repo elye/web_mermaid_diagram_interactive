@@ -58,11 +58,10 @@ export interface DiagramState {
   /**
    * Ids of subgraph clusters currently rendered in collapsed form.
    *
-   * Collapse is a **view-state** toggle (like selection or zoom) — it does
-   * NOT change the semantic graph (nodes / edges / membership) and is
-   * intentionally excluded from undo/redo and file persistence. The rendered
-   * effect is projected from this set by `useClusterCollapse` and the pure
-   * `computeCollapseState` service.
+   * Collapse is a **view-state** toggle — it does NOT change the semantic
+   * graph (nodes / edges / membership) and is excluded from undo/redo.
+   * However, it IS persisted via autosave so that expand/collapse state
+   * survives page refreshes.
    */
   collapsedClusters: Set<string>;
   renderError: string | null;
