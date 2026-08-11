@@ -82,6 +82,8 @@ export interface DiagramState {
   setClusterCollapsed: (clusterId: string, collapsed: boolean) => void;
   /** Expand every currently-collapsed cluster. */
   expandAllClusters: () => void;
+  /** Collapse every subgraph cluster found in the current source. */
+  collapseAllClusters: () => void;
   /** Expand a cluster and all of its collapsed descendants. */
   expandClusterAndDescendants: (clusterId: string) => void;
   deleteNodes: (ids: string[]) => void;
@@ -151,7 +153,7 @@ export const useDiagramStore = create<DiagramState>((set) => ({
       if (next.has(clusterId)) {
         // Expanding: only remove this cluster itself.
         // Nested sub-clusters remain collapsed so the user expands level by
-        // level — clicking Outer reveals Inner as a 120×40 collapsed box.
+        // level — clicking Outer reveals Inner as a 120x40 collapsed box.
         next.delete(clusterId);
       } else {
         // Collapsing: add this cluster and all nested sub-clusters so that
@@ -187,6 +189,19 @@ export const useDiagramStore = create<DiagramState>((set) => ({
     }),
   expandAllClusters: () =>
     set((s) => (s.collapsedClusters.size === 0 ? {} : { collapsedClusters: new Set<string>() })),
+  collapseAllClusters: () =>
+    set((s) => {
+      const membership = parseSubgraphMembership(s.source);
+      if (membership.size === 0) return {};
+      // Collapse every subgraph (including nested ones).
+      const allClusterIds = new Set<string>(membership.keys());
+      // Early-out if already all collapsed.
+      if (allClusterIds.size === s.collapsedClusters.size &&
+          [...allClusterIds].every((id) => s.collapsedClusters.has(id))) {
+        return {};
+      }
+      return { collapsedClusters: allClusterIds };
+    }),
   expandClusterAndDescendants: (clusterId) =>
     set((s) => {
       const membership = parseSubgraphMembership(s.source);
