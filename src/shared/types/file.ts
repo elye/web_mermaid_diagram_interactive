@@ -6,8 +6,9 @@
  *   1.1 — adds edge waypoints, edge anchor overrides, and edge styles so
  *         reshaped/re-anchored/restyled lines survive save/reload.
  *   1.2 — adds clusterStyles so subgraph appearance survives save/reload.
+ *   1.3 — adds collapsedClusters so expand/collapse view state survives reload.
  *
- * Loader accepts all; writer emits 1.2.
+ * Loader accepts all; writer emits 1.3.
  */
 import type {
   PositionOverride,
@@ -23,6 +24,31 @@ export interface MermaidFlowFileV1 {
   mermaidSource: string;
   positionOverrides: Record<string, PositionOverride>;
   styleOverrides: Record<string, StyleOverride>;
+  annotations: Annotation[];
+  theme: string;
+  viewportState: ViewportState;
+  metadata: {
+    createdAt: string;
+    lastModified: string;
+  };
+}
+
+export interface MermaidFlowFileV1_3 {
+  version: '1.3';
+  mermaidSource: string;
+  positionOverrides: Record<string, PositionOverride>;
+  /** Node style overrides (fill / stroke / …). */
+  styleOverrides: Record<string, StyleOverride>;
+  /** Per-edge style overrides. */
+  edgeStyles: Record<string, StyleOverride>;
+  /** Per-edge list of mid-point waypoints reshaping the curve. */
+  edgeWaypoints: Record<string, EdgeWaypoint[]>;
+  /** Per-edge pinned source/target anchor sides. */
+  edgeAnchorOverrides: Record<string, { source?: EdgeAnchorOverride; target?: EdgeAnchorOverride }>;
+  /** Per-subgraph style overrides (fill / stroke / strokeWidth). */
+  clusterStyles: Record<string, StyleOverride>;
+  /** Ids of subgraph clusters currently rendered collapsed. */
+  collapsedClusters: string[];
   annotations: Annotation[];
   theme: string;
   viewportState: ViewportState;
@@ -76,4 +102,8 @@ export interface MermaidFlowFileV1_1 {
   };
 }
 
-export type MermaidFlowFile = MermaidFlowFileV1 | MermaidFlowFileV1_1 | MermaidFlowFileV1_2;
+export type MermaidFlowFile =
+  | MermaidFlowFileV1
+  | MermaidFlowFileV1_1
+  | MermaidFlowFileV1_2
+  | MermaidFlowFileV1_3;

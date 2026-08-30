@@ -19,7 +19,11 @@ export function loadFromText(text: string, filename?: string): ParseResult {
   if (ext === 'mermaidflow' || looksJson) {
     try {
       const parsed = JSON.parse(text) as MermaidFlowFile;
-      const supported = parsed.version === '1.0' || parsed.version === '1.1' || parsed.version === '1.2';
+      const supported =
+        parsed.version === '1.0' ||
+        parsed.version === '1.1' ||
+        parsed.version === '1.2' ||
+        parsed.version === '1.3';
       if (!supported || typeof parsed.mermaidSource !== 'string') {
         return { kind: 'unknown', ok: false, error: 'Unsupported .mermaidflow version.' };
       }
@@ -38,6 +42,7 @@ export function loadFromText(text: string, filename?: string): ParseResult {
   useDiagramStore.getState().hydrate({
     source: text,
     positionOverrides: {},
+    collapsedClusters: new Set<string>(),
   });
   useStyleStore.getState().reset();
   return { kind: 'mermaid', ok: true };
@@ -46,19 +51,23 @@ export function loadFromText(text: string, filename?: string): ParseResult {
 export function hydrateFromFile(file: MermaidFlowFile): void {
   // v1.1 adds edgeStyles / edgeWaypoints / edgeAnchorOverrides.
   // v1.2 adds clusterStyles.
+  // v1.3 adds collapsedClusters (serialised as a string[]).
   // Older files simply omit new fields → treated as empty maps.
-  const isV11orHigher = file.version === '1.1' || file.version === '1.2';
-  const isV12 = file.version === '1.2';
+  const isV11orHigher = file.version === '1.1' || file.version === '1.2' || file.version === '1.3';
+  const isV12orHigher = file.version === '1.2' || file.version === '1.3';
+  const isV13 = file.version === '1.3';
+  const collapsed = isV13 ? (file as { collapsedClusters?: string[] }).collapsedClusters ?? [] : [];
   useDiagramStore.getState().hydrate({
     source: file.mermaidSource,
     positionOverrides: file.positionOverrides ?? {},
     edgeWaypoints: isV11orHigher ? (file as { edgeWaypoints?: {} }).edgeWaypoints ?? {} : {},
     edgeAnchorOverrides: isV11orHigher ? (file as { edgeAnchorOverrides?: {} }).edgeAnchorOverrides ?? {} : {},
+    collapsedClusters: new Set(collapsed),
   });
   useStyleStore.getState().hydrate({
     nodeStyles: file.styleOverrides ?? {},
     edgeStyles: isV11orHigher ? (file as { edgeStyles?: {} }).edgeStyles ?? {} : {},
-    clusterStyles: isV12 ? (file as { clusterStyles?: {} }).clusterStyles ?? {} : {},
+    clusterStyles: isV12orHigher ? (file as { clusterStyles?: {} }).clusterStyles ?? {} : {},
     annotations: file.annotations ?? [],
   });
   if (file.viewportState) {

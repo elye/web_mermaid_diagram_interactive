@@ -12,7 +12,7 @@ export function buildFileObject(): MermaidFlowFile {
   const u = useUiStore.getState();
   const now = new Date().toISOString();
   return {
-    version: '1.2',
+    version: '1.3',
     mermaidSource: d.source,
     positionOverrides: d.positionOverrides,
     styleOverrides: s.nodeStyles,
@@ -20,6 +20,7 @@ export function buildFileObject(): MermaidFlowFile {
     edgeWaypoints: d.edgeWaypoints,
     edgeAnchorOverrides: d.edgeAnchorOverrides,
     clusterStyles: s.clusterStyles,
+    collapsedClusters: [...d.collapsedClusters],
     annotations: s.annotations,
     theme: u.theme,
     viewportState: u.viewport,

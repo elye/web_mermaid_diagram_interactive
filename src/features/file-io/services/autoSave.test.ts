@@ -41,7 +41,7 @@ describe('autoSave', () => {
     const raw = localStorage.getItem(STORAGE_KEY)!;
     expect(raw).not.toBeNull();
     const saved = JSON.parse(raw);
-    expect(saved.version).toBe('1.2');
+    expect(saved.version).toBe('1.3');
     expect(saved.edgeWaypoints.e1).toEqual([{ x: 10, y: 20 }]);
   });
 
