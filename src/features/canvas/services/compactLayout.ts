@@ -49,25 +49,46 @@ interface VisibleElement {
   kind: 'node' | 'collapsed-cluster';
 }
 
+/** Parse a standalone SVG string into a detached element; all geometry
+ *  readers here are attribute-based, so it never needs to be in the DOM. */
+function parseNaturalSvg(svgString: string): SVGSVGElement | null {
+  if (!svgString) return null;
+  const doc = new DOMParser().parseFromString(svgString, 'image/svg+xml');
+  const svg = doc.documentElement as unknown as SVGSVGElement;
+  return svg.nodeName.toLowerCase() === 'svg' ? svg : null;
+}
+
 /**
  * Compute position overrides that re-layout visible elements into a
  * viewport-fitting rectangular grid.
  *
- * @param svgEl              The live SVG element (with collapse already applied).
- * @param hiddenNodeIds      Nodes hidden inside collapsed clusters.
- * @param collapsedClusters  Currently collapsed cluster ids.
- * @param membership         Full subgraph containment map.
- * @param viewportAspect     Width/height ratio of the canvas container (default 16:9).
+ * Reads node/cluster positions from `naturalSvg` — the store's pristine,
+ * pre-override, pre-collapse SVG string — rather than the live DOM. The
+ * live DOM may already carry position overrides and collapse-resized
+ * cluster rects from a *previous* re-route; feeding that back in would
+ * make each click compound on the last click's grid instead of starting
+ * from the same baseline. Reading the pristine source instead makes this
+ * a pure function of (source, collapsedClusters, viewportAspect) — same
+ * inputs always produce the same overrides, so repeated clicks converge
+ * instead of drifting.
+ *
+ * @param naturalSvg          The diagram store's un-mutated rendered SVG string.
+ * @param hiddenNodeIds       Nodes hidden inside collapsed clusters.
+ * @param collapsedClusters   Currently collapsed cluster ids.
+ * @param membership          Full subgraph containment map.
+ * @param viewportAspect      Width/height ratio of the canvas container (default 16:9).
  * @returns Position overrides keyed by node id.
  */
 export function computeCompactLayout(
-  svgEl: SVGSVGElement,
+  naturalSvg: string,
   hiddenNodeIds: ReadonlySet<string>,
   collapsedClusters: ReadonlySet<string>,
   membership: Map<string, Set<string>>,
   viewportAspect: number = 16 / 9,
 ): Record<string, PositionOverride> {
   const overrides: Record<string, PositionOverride> = {};
+  const svgEl = parseNaturalSvg(naturalSvg);
+  if (!svgEl) return overrides;
   const elements: VisibleElement[] = [];
 
   // ── Collect visible nodes ──────────────────────────────

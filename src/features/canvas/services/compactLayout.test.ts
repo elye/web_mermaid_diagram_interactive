@@ -2,12 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { computeCompactLayout } from './compactLayout';
 
 /**
- * Helper: create a minimal SVG DOM with nodes and clusters at specified positions.
+ * Helper: create a minimal SVG string with nodes and clusters at specified
+ * positions. `computeCompactLayout` parses this the same way it parses the
+ * diagram store's pristine `svg` string.
  */
 function buildSvg(opts: {
   nodes?: Array<{ id: string; x: number; y: number; w?: number; h?: number; hidden?: boolean }>;
   clusters?: Array<{ id: string; x: number; y: number; w: number; h: number }>;
-}): SVGSVGElement {
+}): string {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
 
   for (const node of opts.nodes ?? []) {
@@ -39,7 +41,7 @@ function buildSvg(opts: {
     svg.appendChild(g);
   }
 
-  return svg;
+  return new XMLSerializer().serializeToString(svg);
 }
 
 describe('computeCompactLayout', () => {

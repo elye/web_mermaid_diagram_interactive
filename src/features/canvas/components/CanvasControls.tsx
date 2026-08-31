@@ -42,7 +42,7 @@ export function CanvasControls() {
    */
   const handleReRoute = useCallback(() => {
     const state = useDiagramStore.getState();
-    const { source, collapsedClusters, edges, edgeWaypoints, edgeAnchorOverrides } = state;
+    const { source, svg, collapsedClusters, edges, edgeWaypoints, edgeAnchorOverrides } = state;
 
     if (collapsedClusters.size === 0) {
       state.clearPositionOverrides();
@@ -52,8 +52,7 @@ export function CanvasControls() {
     }
 
     const canvas = document.querySelector('.mf-canvas') as HTMLElement | null;
-    const svgEl = canvas?.querySelector('svg') as SVGSVGElement | null;
-    if (!canvas || !svgEl) return;
+    if (!canvas) return;
 
     const containerRect = canvas.getBoundingClientRect();
     const viewportAspect = containerRect.width > 0 && containerRect.height > 0
@@ -77,7 +76,7 @@ export function CanvasControls() {
     }
 
     const compactOverrides = computeCompactLayout(
-      svgEl,
+      svg,
       hiddenNodeIds,
       collapsedClusters,
       membership,
