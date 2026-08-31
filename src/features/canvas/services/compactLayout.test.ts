@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { computeCompactLayout } from './compactLayout';
+import { computeCompactLayout, rectsOverlap, type OverlapRect } from './compactLayout';
+
+/** Smallest axis-aligned rectangle enclosing every rect in `rects`. */
+function unionRect(rects: OverlapRect[]): OverlapRect {
+  const minX = Math.min(...rects.map((r) => r.cx - r.width / 2));
+  const maxX = Math.max(...rects.map((r) => r.cx + r.width / 2));
+  const minY = Math.min(...rects.map((r) => r.cy - r.height / 2));
+  const maxY = Math.max(...rects.map((r) => r.cy + r.height / 2));
+  return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, width: maxX - minX, height: maxY - minY };
+}
 
 /**
  * Helper: create a minimal SVG string with nodes and clusters at specified
@@ -152,18 +161,12 @@ describe('computeCompactLayout', () => {
 
     // Outer's bounding box = union of X (80x40) and the collapsed Inner
     // box (120x40, centered on A's shifted position since A carries it).
-    const outerMinX = Math.min(x.x - 40, a.x - 60);
-    const outerMaxX = Math.max(x.x + 40, a.x + 60);
-    const outerMinY = Math.min(x.y - 20, a.y - 20);
-    const outerMaxY = Math.max(x.y + 20, a.y + 20);
-    const yMinX = y.x - 40;
-    const yMaxX = y.x + 40;
-    const yMinY = y.y - 20;
-    const yMaxY = y.y + 20;
-
-    const separated =
-      outerMaxX < yMinX || outerMinX > yMaxX || outerMaxY < yMinY || outerMinY > yMaxY;
-    expect(separated).toBe(true);
+    const outer = unionRect([
+      { cx: x.x, cy: x.y, width: 80, height: 40 },
+      { cx: a.x, cy: a.y, width: 120, height: 40 },
+    ]);
+    const yRect: OverlapRect = { cx: y.x, cy: y.y, width: 80, height: 40 };
+    expect(rectsOverlap(outer, yRect)).toBe(false);
   });
 
   it('keeps a nested non-collapsed subgraph isolated from unrelated siblings of its parent', () => {
@@ -201,29 +204,15 @@ describe('computeCompactLayout', () => {
     const w = resolved('W', { x: 400, y: 100 });
     const z = resolved('Z', { x: 3000, y: 100 });
 
-    const box = (c: { x: number; y: number }) => ({
-      minX: c.x - 40, maxX: c.x + 40, minY: c.y - 20, maxY: c.y + 20,
-    });
-    const separated = (
-      a: { minX: number; maxX: number; minY: number; maxY: number },
-      b: { minX: number; maxX: number; minY: number; maxY: number },
-    ) => a.maxX < b.minX || a.minX > b.maxX || a.maxY < b.minY || a.minY > b.maxY;
+    const rect = (c: { x: number; y: number }): OverlapRect => ({ cx: c.x, cy: c.y, width: 80, height: 40 });
 
     // Inner's border (P ∪ Q) must not overlap its own sibling W.
-    const innerMinX = Math.min(p.x, q.x) - 40;
-    const innerMaxX = Math.max(p.x, q.x) + 40;
-    const innerMinY = Math.min(p.y, q.y) - 20;
-    const innerMaxY = Math.max(p.y, q.y) + 20;
-    const inner = { minX: innerMinX, maxX: innerMaxX, minY: innerMinY, maxY: innerMaxY };
-    expect(separated(inner, box(w))).toBe(true);
+    const inner = unionRect([rect(p), rect(q)]);
+    expect(rectsOverlap(inner, rect(w))).toBe(false);
 
     // Outer's border (P ∪ Q ∪ W) must not overlap the unrelated node Z.
-    const outerMinX = Math.min(innerMinX, box(w).minX);
-    const outerMaxX = Math.max(innerMaxX, box(w).maxX);
-    const outerMinY = Math.min(innerMinY, box(w).minY);
-    const outerMaxY = Math.max(innerMaxY, box(w).maxY);
-    const outer = { minX: outerMinX, maxX: outerMaxX, minY: outerMinY, maxY: outerMaxY };
-    expect(separated(outer, box(z))).toBe(true);
+    const outer = unionRect([rect(p), rect(q), rect(w)]);
+    expect(rectsOverlap(outer, rect(z))).toBe(false);
   });
 
   it('does not give a nested collapsed subgraph its own grid slot', () => {
@@ -297,20 +286,13 @@ describe('computeCompactLayout', () => {
     const b = resolved('B', { x: 0, y: 300 });
     const y = resolved('Y', { x: 1500, y: 150 });
 
-    // Sub's bounding box (half-extents of a 100x50 node, no extra padding).
-    const subMinX = Math.min(a.x, b.x) - 50;
-    const subMaxX = Math.max(a.x, b.x) + 50;
-    const subMinY = Math.min(a.y, b.y) - 25;
-    const subMaxY = Math.max(a.y, b.y) + 25;
-    const yMinX = y.x - 50;
-    const yMaxX = y.x + 50;
-    const yMinY = y.y - 25;
-    const yMaxY = y.y + 25;
-
-    // AABBs must be separated on at least one axis (no overlap).
-    const separated =
-      subMaxX < yMinX || subMinX > yMaxX || subMaxY < yMinY || subMinY > yMaxY;
-    expect(separated).toBe(true);
+    // Sub's bounding box (100x50 nodes, no extra padding) must not overlap Y.
+    const sub = unionRect([
+      { cx: a.x, cy: a.y, width: 100, height: 50 },
+      { cx: b.x, cy: b.y, width: 100, height: 50 },
+    ]);
+    const yRect: OverlapRect = { cx: y.x, cy: y.y, width: 100, height: 50 };
+    expect(rectsOverlap(sub, yRect)).toBe(false);
   });
 
   it('does not overlap sibling members inside the same subgraph', () => {
@@ -346,14 +328,12 @@ describe('computeCompactLayout', () => {
       resolved('D', { x: 200, y: 200 }),
     ];
 
-    // Every pair of 100x50 members must be axis-separated (no overlap).
+    // Every pair of 100x50 members must not overlap.
     for (let i = 0; i < centers.length; i++) {
       for (let j = i + 1; j < centers.length; j++) {
-        const p = centers[i];
-        const q = centers[j];
-        const separated =
-          Math.abs(p.x - q.x) >= 100 || Math.abs(p.y - q.y) >= 50;
-        expect(separated).toBe(true);
+        const a: OverlapRect = { cx: centers[i].x, cy: centers[i].y, width: 100, height: 50 };
+        const b: OverlapRect = { cx: centers[j].x, cy: centers[j].y, width: 100, height: 50 };
+        expect(rectsOverlap(a, b)).toBe(false);
       }
     }
   });
@@ -430,9 +410,22 @@ describe('computeCompactLayout', () => {
     expect(result['A']).toBeDefined();
     expect(result['B']).toBeDefined();
     expect(result['C']).toBeDefined();
-    // Relative order preserved: A.x < B.x < C.x
-    expect(result['A'].x).toBeLessThan(result['B'].x);
-    expect(result['B'].x).toBeLessThan(result['C'].x);
+
+    // With 3 items the grid may wrap onto multiple rows/columns (e.g. a
+    // 2-column grid puts the 3rd item under the 1st), so raw x is NOT
+    // guaranteed to be strictly increasing across every element — only
+    // reading order (row-major: each row left-to-right, rows top-to-
+    // bottom) is. Sorting by the same row-quantization the algorithm uses
+    // internally must reproduce the original left-to-right order.
+    const byReadingOrder = ['A', 'B', 'C']
+      .map((id) => ({ id, x: result[id].x, y: result[id].y }))
+      .sort((a, b) => {
+        const rowA = Math.round(a.y / 80);
+        const rowB = Math.round(b.y / 80);
+        return rowA !== rowB ? rowA - rowB : a.x - b.x;
+      })
+      .map((p) => p.id);
+    expect(byReadingOrder).toEqual(['A', 'B', 'C']);
   });
 
   it('adapts grid columns to viewport aspect ratio', () => {
@@ -526,5 +519,31 @@ describe('computeCompactLayout', () => {
     // centered at the centroid. One will move, so at least one override.
     // The key point: it doesn't crash, and handles the 5px threshold.
     expect(result).toBeDefined();
+  });
+});
+
+describe('rectsOverlap', () => {
+  it('detects overlapping rectangles', () => {
+    const a: OverlapRect = { cx: 0, cy: 0, width: 100, height: 50 };
+    const b: OverlapRect = { cx: 40, cy: 10, width: 100, height: 50 };
+    expect(rectsOverlap(a, b)).toBe(true);
+  });
+
+  it('detects separation on the X axis', () => {
+    const a: OverlapRect = { cx: 0, cy: 0, width: 100, height: 50 };
+    const b: OverlapRect = { cx: 200, cy: 0, width: 100, height: 50 };
+    expect(rectsOverlap(a, b)).toBe(false);
+  });
+
+  it('detects separation on the Y axis', () => {
+    const a: OverlapRect = { cx: 0, cy: 0, width: 100, height: 50 };
+    const b: OverlapRect = { cx: 0, cy: 100, width: 100, height: 50 };
+    expect(rectsOverlap(a, b)).toBe(false);
+  });
+
+  it('treats rectangles that exactly touch (edge-to-edge) as not overlapping', () => {
+    const a: OverlapRect = { cx: 0, cy: 0, width: 100, height: 50 };
+    const b: OverlapRect = { cx: 100, cy: 0, width: 100, height: 50 };
+    expect(rectsOverlap(a, b)).toBe(false);
   });
 });

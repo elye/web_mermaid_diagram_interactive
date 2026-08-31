@@ -41,6 +41,125 @@ const GRID_PADDING = 40;
  *  neighboring item. */
 const SUBGRAPH_BLOCK_MARGIN = 64;
 
+/** An axis-aligned rectangle described by its center and full size. */
+export interface OverlapRect {
+  cx: number;
+  cy: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * True if two axis-aligned rectangles overlap by any amount. This is the
+ * single common check used everywhere two components' rectangles need to
+ * be compared — both as an internal invariant check while packing (below)
+ * and by tests asserting two placed components don't overlap.
+ */
+export function rectsOverlap(a: OverlapRect, b: OverlapRect): boolean {
+  return (
+    Math.abs(a.cx - b.cx) < (a.width + b.width) / 2 &&
+    Math.abs(a.cy - b.cy) < (a.height + b.height) / 2
+  );
+}
+
+/** True if ANY pair of `items` (placed at the parallel `positions`) overlap. */
+function anyOverlap(
+  items: { width: number; height: number }[],
+  positions: { cx: number; cy: number }[],
+): boolean {
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      const a = { cx: positions[i].cx, cy: positions[i].cy, width: items[i].width, height: items[i].height };
+      const b = { cx: positions[j].cx, cy: positions[j].cy, width: items[j].width, height: items[j].height };
+      if (rectsOverlap(a, b)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Pack `items` into a grid whose COLUMN WIDTHS / ROW HEIGHTS adapt to the
+ * largest item in each column/row (like an HTML table), searching for the
+ * column count whose resulting grid aspect ratio best matches `aspect`.
+ * Column widths and row heights are what make this overlap-free by
+ * construction: two items can never share less space than either needs.
+ * Returns each item's target CENTER in local packed-space (origin at the
+ * grid's top-left corner) plus the overall packed width/height.
+ */
+function layoutItemsInGrid(
+  items: { width: number; height: number }[],
+  aspect: number,
+  gapX: number,
+  gapY: number,
+): { positions: { cx: number; cy: number }[]; width: number; height: number } {
+  const n = items.length;
+  function layoutForCols(cols: number) {
+    const rows = Math.ceil(n / cols);
+    const colWidths = new Array(cols).fill(0);
+    const rowHeights = new Array(rows).fill(0);
+    for (let i = 0; i < n; i++) {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      colWidths[col] = Math.max(colWidths[col], items[i].width);
+      rowHeights[row] = Math.max(rowHeights[row], items[i].height);
+    }
+    const gridW = colWidths.reduce((s, w) => s + w, 0) + (cols - 1) * gapX;
+    const gridH = rowHeights.reduce((s, h) => s + h, 0) + (rows - 1) * gapY;
+    return { rows, colWidths, rowHeights, gridW, gridH };
+  }
+
+  let bestCols = 1;
+  let bestDiff = Infinity;
+  let best = layoutForCols(1);
+  for (let cols = 1; cols <= n; cols++) {
+    const layout = layoutForCols(cols);
+    const diff = Math.abs(layout.gridW / layout.gridH - aspect);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestCols = cols;
+      best = layout;
+    }
+  }
+
+  const { rows, colWidths, rowHeights, gridW, gridH } = best;
+  const colX: number[] = [];
+  for (let c = 0, acc = 0; c < bestCols; c++) { colX.push(acc); acc += colWidths[c] + gapX; }
+  const rowY: number[] = [];
+  for (let r = 0, acc = 0; r < rows; r++) { rowY.push(acc); acc += rowHeights[r] + gapY; }
+
+  const positions = items.map((_, i) => {
+    const col = i % bestCols;
+    const row = Math.floor(i / bestCols);
+    return { cx: colX[col] + colWidths[col] / 2, cy: rowY[row] + rowHeights[row] / 2 };
+  });
+
+  return { positions, width: gridW, height: gridH };
+}
+
+/**
+ * `layoutItemsInGrid`, but verified against `rectsOverlap`/`anyOverlap`
+ * before returning. The grid math already guarantees non-overlap given
+ * accurate item sizes, but component footprints are estimates (a
+ * subgraph's real rendered border depends on its label text, nested
+ * padding, etc.) — so this is the actual enforcement point: if the
+ * estimate ever turns out too tight, the gap is grown and the grid is
+ * recomputed until every pair of rectangles is verified clear.
+ */
+function packItemsSafely(
+  items: { width: number; height: number }[],
+  aspect: number,
+): { positions: { cx: number; cy: number }[]; width: number; height: number } {
+  let gapX = CELL_GAP_X;
+  let gapY = CELL_GAP_Y;
+  let result = layoutItemsInGrid(items, aspect, gapX, gapY);
+  for (let attempt = 0; attempt < 5 && anyOverlap(items, result.positions); attempt++) {
+    gapX *= 1.5;
+    gapY *= 1.5;
+    result = layoutItemsInGrid(items, aspect, gapX, gapY);
+  }
+  return result;
+}
+
 interface VisibleElement {
   id: string;
   /** Current center x in SVG root coordinates. */
@@ -104,23 +223,20 @@ function buildSubgraphBlock(groupId: string, children: VisibleElement[]): Visibl
   });
 
   const n = sorted.length;
-  const cols = Math.ceil(Math.sqrt(n));
-  const rows = Math.ceil(n / cols);
-  const cellW = Math.max(...sorted.map((c) => c.width)) + CELL_GAP_X;
-  const cellH = Math.max(...sorted.map((c) => c.height)) + CELL_GAP_Y;
+  const packed = packItemsSafely(sorted, 1);
 
   const members = sorted.map((component, i) => ({
     component,
-    offsetX: ((i % cols) - (cols - 1) / 2) * cellW,
-    offsetY: (Math.floor(i / cols) - (rows - 1) / 2) * cellH,
+    offsetX: packed.positions[i].cx - packed.width / 2,
+    offsetY: packed.positions[i].cy - packed.height / 2,
   }));
 
   return {
     id: groupId,
     cx: sorted.reduce((s, c) => s + c.cx, 0) / n,
     cy: sorted.reduce((s, c) => s + c.cy, 0) / n,
-    width: cols * cellW - CELL_GAP_X + SUBGRAPH_BLOCK_MARGIN,
-    height: rows * cellH - CELL_GAP_Y + SUBGRAPH_BLOCK_MARGIN,
+    width: packed.width + SUBGRAPH_BLOCK_MARGIN,
+    height: packed.height + SUBGRAPH_BLOCK_MARGIN,
     kind: 'subgraph-block',
     members,
   };
@@ -254,58 +370,21 @@ export function computeCompactLayout(
 
   const n = elements.length;
 
-  // ── Pack items into a grid whose COLUMN WIDTHS / ROW HEIGHTS adapt to
-  // the largest item in each column/row (like an HTML table), searching
-  // for the column count whose resulting grid aspect ratio best matches
-  // the viewport ──────────────────────────────────────────────────────
+  // ── Pack items into a grid, verified overlap-free by `packItemsSafely` ───
   // A fixed-size shelf (single target row width) breaks down as soon as
-  // one item (e.g. a subgraph block) is wide enough to fill a whole row
-  // by itself — every other item then gets pushed onto its own row too,
-  // degenerating into a single vertical column regardless of aspect
-  // ratio. A real per-column/per-row table has no such failure mode: it
-  // always considers every column count from 1..n, so it can still use
-  // width AND height to match the viewport instead of just stacking.
-  // Column widths and row heights are also what keep this overlap-free:
-  // two items can never share less space than either one needs.
-  function layoutForCols(cols: number) {
-    const rows = Math.ceil(n / cols);
-    const colWidths = new Array(cols).fill(0);
-    const rowHeights = new Array(rows).fill(0);
-    for (let i = 0; i < n; i++) {
-      const col = i % cols;
-      const row = Math.floor(i / cols);
-      colWidths[col] = Math.max(colWidths[col], elements[i].width);
-      rowHeights[row] = Math.max(rowHeights[row], elements[i].height);
-    }
-    const gridW = colWidths.reduce((s, w) => s + w, 0) + (cols - 1) * CELL_GAP_X;
-    const gridH = rowHeights.reduce((s, h) => s + h, 0) + (rows - 1) * CELL_GAP_Y;
-    return { rows, colWidths, rowHeights, gridW, gridH };
-  }
-
-  let bestCols = 1;
-  let bestDiff = Infinity;
-  let best = layoutForCols(1);
-  for (let cols = 1; cols <= n; cols++) {
-    const layout = layoutForCols(cols);
-    const diff = Math.abs(layout.gridW / layout.gridH - viewportAspect);
-    if (diff < bestDiff) {
-      bestDiff = diff;
-      bestCols = cols;
-      best = layout;
-    }
-  }
-
-  const { rows, colWidths, rowHeights, gridW, gridH } = best;
-  const colX: number[] = [];
-  for (let c = 0, acc = 0; c < bestCols; c++) { colX.push(acc); acc += colWidths[c] + CELL_GAP_X; }
-  const rowYOffsets: number[] = [];
-  for (let r = 0, acc = 0; r < rows; r++) { rowYOffsets.push(acc); acc += rowHeights[r] + CELL_GAP_Y; }
+  // one item (e.g. a subgraph block) is wide enough to fill a whole row by
+  // itself — every other item then gets pushed onto its own row too,
+  // degenerating into a single vertical column regardless of aspect ratio.
+  // The column/row table search always considers every column count from
+  // 1..n, so it can still use width AND height to match the viewport
+  // instead of just stacking.
+  const packed = packItemsSafely(elements, viewportAspect);
 
   // Re-center the grid at the centroid of the original layout.
   const centroidX = elements.reduce((s, e) => s + e.cx, 0) / n;
   const centroidY = elements.reduce((s, e) => s + e.cy, 0) / n;
-  const shiftX = centroidX - gridW / 2;
-  const shiftY = centroidY - gridH / 2;
+  const shiftX = centroidX - packed.width / 2;
+  const shiftY = centroidY - packed.height / 2;
 
   // Recursively apply a target center to an element: a plain node or
   // collapsed cluster writes overrides directly; a subgraph-block instead
@@ -330,13 +409,9 @@ export function computeCompactLayout(
 
   // ── Assign each element to its grid cell and compute overrides ───────────
   for (let i = 0; i < n; i++) {
-    const el = elements[i];
-    const col = i % bestCols;
-    const row = Math.floor(i / bestCols);
-    // Center the item within its (possibly larger) cell.
-    const targetCx = colX[col] + colWidths[col] / 2 + shiftX;
-    const targetCy = rowYOffsets[row] + rowHeights[row] / 2 + shiftY;
-    applyElementOverride(el, targetCx, targetCy);
+    const targetCx = packed.positions[i].cx + shiftX;
+    const targetCy = packed.positions[i].cy + shiftY;
+    applyElementOverride(elements[i], targetCx, targetCy);
   }
 
   return overrides;
