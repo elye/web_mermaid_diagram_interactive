@@ -38,22 +38,17 @@ export function CanvasControls() {
   const reset = () => setViewport({ zoom: 1, panX: 0, panY: 0 });
 
   /**
-   * Re-route: recompute an optimal layout for VISIBLE elements only.
+   * Re-route: recompute a compact, overlap-free layout for all visible
+   * elements — runs regardless of whether any subgraph is collapsed, since
+   * Mermaid's own natural layout can itself place sibling nodes too close
+   * together (a dagre trait on dense/heavily cross-linked graphs).
    */
   const handleReRoute = useCallback(() => {
     const state = useDiagramStore.getState();
-    const { source, collapsedClusters, edges, edgeWaypoints, edgeAnchorOverrides } = state;
-
-    if (collapsedClusters.size === 0) {
-      state.clearPositionOverrides();
-      state.clearEdgeWaypoints();
-      state.clearEdgeAnchorOverrides();
-      return;
-    }
+    const { source, svg, collapsedClusters, edges, edgeWaypoints, edgeAnchorOverrides } = state;
 
     const canvas = document.querySelector('.mf-canvas') as HTMLElement | null;
-    const svgEl = canvas?.querySelector('svg') as SVGSVGElement | null;
-    if (!canvas || !svgEl) return;
+    if (!canvas) return;
 
     const containerRect = canvas.getBoundingClientRect();
     const viewportAspect = containerRect.width > 0 && containerRect.height > 0
@@ -77,7 +72,7 @@ export function CanvasControls() {
     }
 
     const compactOverrides = computeCompactLayout(
-      svgEl,
+      svg,
       hiddenNodeIds,
       collapsedClusters,
       membership,

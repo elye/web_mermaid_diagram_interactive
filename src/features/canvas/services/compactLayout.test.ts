@@ -1,13 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { computeCompactLayout } from './compactLayout';
+import { computeCompactLayout, rectsOverlap, type OverlapRect } from './compactLayout';
+
+/** Smallest axis-aligned rectangle enclosing every rect in `rects`. */
+function unionRect(rects: OverlapRect[]): OverlapRect {
+  const minX = Math.min(...rects.map((r) => r.cx - r.width / 2));
+  const maxX = Math.max(...rects.map((r) => r.cx + r.width / 2));
+  const minY = Math.min(...rects.map((r) => r.cy - r.height / 2));
+  const maxY = Math.max(...rects.map((r) => r.cy + r.height / 2));
+  return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, width: maxX - minX, height: maxY - minY };
+}
 
 /**
- * Helper: create a minimal SVG DOM with nodes and clusters at specified positions.
+ * Helper: create a minimal SVG string with nodes and clusters at specified
+ * positions. `computeCompactLayout` parses this the same way it parses the
+ * diagram store's pristine `svg` string.
  */
 function buildSvg(opts: {
   nodes?: Array<{ id: string; x: number; y: number; w?: number; h?: number; hidden?: boolean }>;
   clusters?: Array<{ id: string; x: number; y: number; w: number; h: number }>;
-}): SVGSVGElement {
+}): string {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
 
   for (const node of opts.nodes ?? []) {
@@ -39,7 +50,7 @@ function buildSvg(opts: {
     svg.appendChild(g);
   }
 
-  return svg;
+  return new XMLSerializer().serializeToString(svg);
 }
 
 describe('computeCompactLayout', () => {
@@ -110,6 +121,255 @@ describe('computeCompactLayout', () => {
     expect(result['A']).toBeDefined();
   });
 
+  it('groups a top-level collapsed cluster with its non-collapsed parent subgraph', () => {
+    // Outer (non-collapsed) directly contains node X plus a nested,
+    // collapsed cluster Inner (containing hidden node A). Inner's box is
+    // independently visible (Outer isn't collapsed), but it still belongs
+    // INSIDE Outer's border — so it must be grouped with X, not placed as
+    // its own free-floating grid item where an unrelated node could land
+    // between them (inside Outer's auto-fitted border).
+    const svg = buildSvg({
+      nodes: [
+        { id: 'A', x: 50, y: 300, w: 80, h: 40, hidden: true },
+        { id: 'X', x: 50, y: 0, w: 80, h: 40 },
+        { id: 'Y', x: 2000, y: 150, w: 80, h: 40 },
+      ],
+      clusters: [
+        { id: 'Inner', x: 50, y: 300, w: 120, h: 40 },
+      ],
+    });
+
+    const membership = new Map<string, Set<string>>([
+      ['Outer', new Set(['Inner', 'X'])],
+      ['Inner', new Set(['A'])],
+    ]);
+    const hiddenNodeIds = new Set(['A']);
+    const collapsedClusters = new Set(['Inner']);
+
+    const result = computeCompactLayout(
+      svg,
+      hiddenNodeIds,
+      collapsedClusters,
+      membership,
+      16 / 9,
+    );
+
+    const resolved = (id: string, orig: { x: number; y: number }) => result[id] ?? orig;
+    const a = resolved('A', { x: 50, y: 300 });
+    const x = resolved('X', { x: 50, y: 0 });
+    const y = resolved('Y', { x: 2000, y: 150 });
+
+    // Outer's bounding box = union of X (80x40) and the collapsed Inner
+    // box (120x40, centered on A's shifted position since A carries it).
+    const outer = unionRect([
+      { cx: x.x, cy: x.y, width: 80, height: 40 },
+      { cx: a.x, cy: a.y, width: 120, height: 40 },
+    ]);
+    const yRect: OverlapRect = { cx: y.x, cy: y.y, width: 80, height: 40 };
+    expect(rectsOverlap(outer, yRect)).toBe(false);
+  });
+
+  it('keeps a nested non-collapsed subgraph isolated from unrelated siblings of its parent', () => {
+    // Outer (non-collapsed) contains: nested non-collapsed Inner (members
+    // P, Q) plus its own direct sibling node W. Flattening P/Q/W into one
+    // mini-grid (ignoring the Inner/Outer distinction) could interleave W
+    // between P and Q, landing it inside Inner's auto-fitted border even
+    // though W isn't one of Inner's members. An unrelated top-level node Z
+    // must also stay outside Outer's overall border.
+    const svg = buildSvg({
+      nodes: [
+        { id: 'P', x: 0, y: 0, w: 80, h: 40 },
+        { id: 'Q', x: 0, y: 200, w: 80, h: 40 },
+        { id: 'W', x: 400, y: 100, w: 80, h: 40 },
+        { id: 'Z', x: 3000, y: 100, w: 80, h: 40 },
+      ],
+    });
+
+    const membership = new Map<string, Set<string>>([
+      ['Outer', new Set(['Inner', 'W'])],
+      ['Inner', new Set(['P', 'Q'])],
+    ]);
+
+    const result = computeCompactLayout(
+      svg,
+      new Set<string>(),
+      new Set<string>(),
+      membership,
+      16 / 9,
+    );
+
+    const resolved = (id: string, orig: { x: number; y: number }) => result[id] ?? orig;
+    const p = resolved('P', { x: 0, y: 0 });
+    const q = resolved('Q', { x: 0, y: 200 });
+    const w = resolved('W', { x: 400, y: 100 });
+    const z = resolved('Z', { x: 3000, y: 100 });
+
+    const rect = (c: { x: number; y: number }): OverlapRect => ({ cx: c.x, cy: c.y, width: 80, height: 40 });
+
+    // Inner's border (P ∪ Q) must not overlap its own sibling W.
+    const inner = unionRect([rect(p), rect(q)]);
+    expect(rectsOverlap(inner, rect(w))).toBe(false);
+
+    // Outer's border (P ∪ Q ∪ W) must not overlap the unrelated node Z.
+    const outer = unionRect([rect(p), rect(q), rect(w)]);
+    expect(rectsOverlap(outer, rect(z))).toBe(false);
+  });
+
+  it('does not give a nested collapsed subgraph its own grid slot', () => {
+    // Outer collapsed cluster contains node X directly plus nested cluster
+    // Inner (also collapsed, but not independently visible — it's hidden
+    // inside Outer's box). Inner contains node A.
+    const svg = buildSvg({
+      nodes: [
+        { id: 'X', x: 50, y: 0, w: 80, h: 40, hidden: true },
+        { id: 'A', x: 50, y: 300, w: 80, h: 40, hidden: true },
+        { id: 'API', x: 1000, y: 0, w: 80, h: 40 },
+      ],
+      clusters: [
+        { id: 'Outer', x: 50, y: 150, w: 120, h: 400 },
+        { id: 'Inner', x: 50, y: 300, w: 120, h: 40 },
+      ],
+    });
+
+    const membership = new Map<string, Set<string>>([
+      ['Outer', new Set(['Inner', 'X'])],
+      ['Inner', new Set(['A'])],
+    ]);
+    const hiddenNodeIds = new Set(['A', 'X']);
+    const collapsedClusters = new Set(['Outer', 'Inner']);
+
+    const result = computeCompactLayout(
+      svg,
+      hiddenNodeIds,
+      collapsedClusters,
+      membership,
+      16 / 9,
+    );
+
+    // Both descendants moved by the SAME delta (single grid slot for Outer),
+    // so their original relative offset (A is 300px below X) is preserved.
+    expect(result['X']).toBeDefined();
+    expect(result['A']).toBeDefined();
+    expect(result['A'].x - result['X'].x).toBeCloseTo(0, 5);
+    expect(result['A'].y - result['X'].y).toBeCloseTo(300, 5);
+  });
+
+  it('does not let an unrelated node overlap a non-collapsed subgraph after routing', () => {
+    // Sub's members (A, B) are stacked vertically; unrelated node Y sits
+    // between their original y-range but far away in x. If members were
+    // gridded independently (ignoring subgraph membership), Y could get
+    // sorted/placed between A and B, landing inside Sub's auto-fitted
+    // bounding box even though it isn't one of its members.
+    const svg = buildSvg({
+      nodes: [
+        { id: 'A', x: 0, y: 0, w: 100, h: 50 },
+        { id: 'B', x: 0, y: 300, w: 100, h: 50 },
+        { id: 'Y', x: 1500, y: 150, w: 100, h: 50 },
+      ],
+    });
+
+    const membership = new Map<string, Set<string>>([
+      ['Sub', new Set(['A', 'B'])],
+    ]);
+
+    const result = computeCompactLayout(
+      svg,
+      new Set<string>(),
+      new Set<string>(),
+      membership,
+      16 / 9,
+    );
+
+    const resolved = (id: string, orig: { x: number; y: number }) =>
+      result[id] ?? orig;
+    const a = resolved('A', { x: 0, y: 0 });
+    const b = resolved('B', { x: 0, y: 300 });
+    const y = resolved('Y', { x: 1500, y: 150 });
+
+    // Sub's bounding box (100x50 nodes, no extra padding) must not overlap Y.
+    const sub = unionRect([
+      { cx: a.x, cy: a.y, width: 100, height: 50 },
+      { cx: b.x, cy: b.y, width: 100, height: 50 },
+    ]);
+    const yRect: OverlapRect = { cx: y.x, cy: y.y, width: 100, height: 50 };
+    expect(rectsOverlap(sub, yRect)).toBe(false);
+  });
+
+  it('does not overlap sibling members inside the same subgraph', () => {
+    // A 2x2-ish subgraph: with a naive single-shelf-width heuristic, the
+    // widest item claiming the whole row can cascade every other item
+    // (including these siblings) onto their own row, and — with buggy
+    // offset math — even on top of each other.
+    const svg = buildSvg({
+      nodes: [
+        { id: 'A', x: 0, y: 0, w: 100, h: 50 },
+        { id: 'B', x: 200, y: 0, w: 100, h: 50 },
+        { id: 'C', x: 0, y: 200, w: 100, h: 50 },
+        { id: 'D', x: 200, y: 200, w: 100, h: 50 },
+      ],
+    });
+    const membership = new Map<string, Set<string>>([
+      ['Sub', new Set(['A', 'B', 'C', 'D'])],
+    ]);
+
+    const result = computeCompactLayout(
+      svg,
+      new Set<string>(),
+      new Set<string>(),
+      membership,
+      16 / 9,
+    );
+
+    const resolved = (id: string, orig: { x: number; y: number }) => result[id] ?? orig;
+    const centers = [
+      resolved('A', { x: 0, y: 0 }),
+      resolved('B', { x: 200, y: 0 }),
+      resolved('C', { x: 0, y: 200 }),
+      resolved('D', { x: 200, y: 200 }),
+    ];
+
+    // Every pair of 100x50 members must not overlap.
+    for (let i = 0; i < centers.length; i++) {
+      for (let j = i + 1; j < centers.length; j++) {
+        const a: OverlapRect = { cx: centers[i].x, cy: centers[i].y, width: 100, height: 50 };
+        const b: OverlapRect = { cx: centers[j].x, cy: centers[j].y, width: 100, height: 50 };
+        expect(rectsOverlap(a, b)).toBe(false);
+      }
+    }
+  });
+
+  it('spreads many items across columns instead of collapsing to one column', () => {
+    // 8 standalone nodes plus a 2-member subgraph, targeting a wide (16:9)
+    // viewport. A single wide item should not force every other item onto
+    // its own row (the failure mode of a fixed-target-row-width shelf).
+    const nodes = Array.from({ length: 8 }, (_, i) => ({
+      id: `N${i}`,
+      x: 0,
+      y: i * 150,
+      w: 100,
+      h: 50,
+    }));
+    nodes.push({ id: 'S1', x: 1000, y: 0, w: 100, h: 50 });
+    nodes.push({ id: 'S2', x: 1000, y: 150, w: 100, h: 50 });
+    const svg = buildSvg({ nodes });
+
+    const membership = new Map<string, Set<string>>([
+      ['Sub', new Set(['S1', 'S2'])],
+    ]);
+
+    const result = computeCompactLayout(
+      svg,
+      new Set<string>(),
+      new Set<string>(),
+      membership,
+      16 / 9,
+    );
+
+    const xs = new Set(Object.values(result).map((p) => Math.round(p.x)));
+    // More than one distinct x column should be in use.
+    expect(xs.size).toBeGreaterThan(1);
+  });
+
   it('does not include hidden nodes in visible element calculation', () => {
     const svg = buildSvg({
       nodes: [
@@ -150,9 +410,22 @@ describe('computeCompactLayout', () => {
     expect(result['A']).toBeDefined();
     expect(result['B']).toBeDefined();
     expect(result['C']).toBeDefined();
-    // Relative order preserved: A.x < B.x < C.x
-    expect(result['A'].x).toBeLessThan(result['B'].x);
-    expect(result['B'].x).toBeLessThan(result['C'].x);
+
+    // With 3 items the grid may wrap onto multiple rows/columns (e.g. a
+    // 2-column grid puts the 3rd item under the 1st), so raw x is NOT
+    // guaranteed to be strictly increasing across every element — only
+    // reading order (row-major: each row left-to-right, rows top-to-
+    // bottom) is. Sorting by the same row-quantization the algorithm uses
+    // internally must reproduce the original left-to-right order.
+    const byReadingOrder = ['A', 'B', 'C']
+      .map((id) => ({ id, x: result[id].x, y: result[id].y }))
+      .sort((a, b) => {
+        const rowA = Math.round(a.y / 80);
+        const rowB = Math.round(b.y / 80);
+        return rowA !== rowB ? rowA - rowB : a.x - b.x;
+      })
+      .map((p) => p.id);
+    expect(byReadingOrder).toEqual(['A', 'B', 'C']);
   });
 
   it('adapts grid columns to viewport aspect ratio', () => {
@@ -246,5 +519,31 @@ describe('computeCompactLayout', () => {
     // centered at the centroid. One will move, so at least one override.
     // The key point: it doesn't crash, and handles the 5px threshold.
     expect(result).toBeDefined();
+  });
+});
+
+describe('rectsOverlap', () => {
+  it('detects overlapping rectangles', () => {
+    const a: OverlapRect = { cx: 0, cy: 0, width: 100, height: 50 };
+    const b: OverlapRect = { cx: 40, cy: 10, width: 100, height: 50 };
+    expect(rectsOverlap(a, b)).toBe(true);
+  });
+
+  it('detects separation on the X axis', () => {
+    const a: OverlapRect = { cx: 0, cy: 0, width: 100, height: 50 };
+    const b: OverlapRect = { cx: 200, cy: 0, width: 100, height: 50 };
+    expect(rectsOverlap(a, b)).toBe(false);
+  });
+
+  it('detects separation on the Y axis', () => {
+    const a: OverlapRect = { cx: 0, cy: 0, width: 100, height: 50 };
+    const b: OverlapRect = { cx: 0, cy: 100, width: 100, height: 50 };
+    expect(rectsOverlap(a, b)).toBe(false);
+  });
+
+  it('treats rectangles that exactly touch (edge-to-edge) as not overlapping', () => {
+    const a: OverlapRect = { cx: 0, cy: 0, width: 100, height: 50 };
+    const b: OverlapRect = { cx: 100, cy: 0, width: 100, height: 50 };
+    expect(rectsOverlap(a, b)).toBe(false);
   });
 });

@@ -27,11 +27,15 @@ import type { BBox } from '@/shared/types/diagram';
 import { parseTranslate } from './transforms';
 
 /**
- * The set of shape tags we know how to measure. Order matters — Mermaid
- * often places a decorative `<rect>` before the actual shape, so we take
- * the first match that has real geometry.
+ * The set of shape tags we know how to measure, scoped to DIRECT children
+ * of the node group only. Mermaid always renders the node's own shape as
+ * the first direct child, followed by a sibling `<g class="label">` that
+ * contains its OWN (often zero-sized) `<rect>` — an unscoped selector like
+ * `g.querySelector('rect, ...')` matches that nested label rect instead of
+ * the real shape (wrong element, first in document order), producing a
+ * near-zero bbox for any node whose shape isn't itself a `<rect>`.
  */
-const SHAPE_SELECTOR = 'rect, polygon, circle, ellipse, path.node-shape, .node-bkg';
+const SHAPE_SELECTOR = ':scope > rect, :scope > polygon, :scope > circle, :scope > ellipse, :scope > path, :scope > .node-bkg';
 
 /**
  * BBox of a Mermaid group `<g class="node">` in root SVG coordinates.
@@ -81,7 +85,11 @@ export function localBBox(shape: Element): BBox | null {
     return { x: cx - rx, y: cy - ry, width: rx * 2, height: ry * 2 };
   }
   if (tag === 'polygon' || tag === 'path') {
-    return polygonPointsBBox(shape.getAttribute('points'));
+    const fromPoints = polygonPointsBBox(shape.getAttribute('points'));
+    if (fromPoints) return fromPoints;
+    // Curved shapes (cylinder, stadium caps, rounded corners) have no
+    // `points` attribute — only a `d` path string with arc/line commands.
+    return pathBBox(shape.getAttribute('d'));
   }
   return null;
 }
@@ -105,6 +113,77 @@ function polygonPointsBBox(pointsAttr: string | null): BBox | null {
 
 function num(el: Element, attr: string): number {
   return Number(el.getAttribute(attr) ?? '0');
+}
+
+/**
+ * Minimal SVG path `d` bounding box: walks M/L/H/V/A/Z (and lowercase
+ * relative variants) tracking the pen position, expanding bounds at each
+ * command's endpoint. Arcs (A/a) — the only curved command Mermaid's
+ * built-in node shapes emit, for cylinder caps / rounded corners — are
+ * bounded conservatively by expanding the radii around both endpoints
+ * rather than solving for the true ellipse extrema; this can slightly
+ * over-estimate but never under-estimates, which is what matters for
+ * reserving enough layout space. Unsupported commands (bezier curves)
+ * stop parsing and return whatever bounds were accumulated so far.
+ */
+function pathBBox(d: string | null): BBox | null {
+  if (!d) return null;
+  const tokens = d.match(/[MLHVAZmlhvaz]|-?\d*\.?\d+(?:e-?\d+)?/g);
+  if (!tokens) return null;
+
+  let i = 0;
+  let cx = 0;
+  let cy = 0;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const expand = (x: number, y: number, rx = 0, ry = 0) => {
+    minX = Math.min(minX, x - rx);
+    maxX = Math.max(maxX, x + rx);
+    minY = Math.min(minY, y - ry);
+    maxY = Math.max(maxY, y + ry);
+  };
+  const next = () => parseFloat(tokens[i++]);
+  const result = (): BBox | null =>
+    minX === Infinity ? null : { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+
+  let cmd = '';
+  while (i < tokens.length) {
+    if (/^[MLHVAZmlhvaz]$/.test(tokens[i])) cmd = tokens[i++];
+    switch (cmd) {
+      case 'M': cx = next(); cy = next(); expand(cx, cy); cmd = 'L'; break;
+      case 'm': cx += next(); cy += next(); expand(cx, cy); cmd = 'l'; break;
+      case 'L': cx = next(); cy = next(); expand(cx, cy); break;
+      case 'l': cx += next(); cy += next(); expand(cx, cy); break;
+      case 'H': cx = next(); expand(cx, cy); break;
+      case 'h': cx += next(); expand(cx, cy); break;
+      case 'V': cy = next(); expand(cx, cy); break;
+      case 'v': cy += next(); expand(cx, cy); break;
+      case 'A':
+      case 'a': {
+        const rx = next();
+        const ry = next();
+        next(); // x-axis-rotation
+        next(); // large-arc-flag
+        next(); // sweep-flag
+        const relative = cmd === 'a';
+        const ex = relative ? cx + next() : next();
+        const ey = relative ? cy + next() : next();
+        expand(cx, cy, rx, ry);
+        expand(ex, ey, rx, ry);
+        cx = ex;
+        cy = ey;
+        break;
+      }
+      case 'Z':
+      case 'z':
+        break;
+      default:
+        return result();
+    }
+  }
+  return result();
 }
 
 /**
