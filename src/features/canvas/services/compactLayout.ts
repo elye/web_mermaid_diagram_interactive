@@ -33,9 +33,6 @@ const COLLAPSED_H = 40;
 const CELL_GAP_X = 80;
 const CELL_GAP_Y = 60;
 
-/** Padding around the entire grid (px). */
-const GRID_PADDING = 40;
-
 /** Extra clearance around a packed subgraph block so the cluster's rendered
  *  border (which pads out beyond the raw member bboxes) never touches a
  *  neighboring item. */
@@ -394,11 +391,11 @@ export function computeCompactLayout(
     const dx = targetCx - el.cx;
     const dy = targetCy - el.cy;
     if (el.kind === 'node') {
-      applyNodeOverride(svgEl, overrides, el.id, dx, dy);
+      applyNodeOverride(svgEl!, overrides, el.id, dx, dy);
     } else if (el.kind === 'collapsed-cluster') {
       // For collapsed clusters: move all hidden member nodes by the same delta.
       for (const nodeId of collectAllNodeIds(el.id, membership)) {
-        applyNodeOverride(svgEl, overrides, nodeId, dx, dy);
+        applyNodeOverride(svgEl!, overrides, nodeId, dx, dy);
       }
     } else {
       for (const member of el.members ?? []) {
