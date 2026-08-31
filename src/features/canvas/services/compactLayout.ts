@@ -59,6 +59,23 @@ function parseNaturalSvg(svgString: string): SVGSVGElement | null {
 }
 
 /**
+ * A collapsed cluster is only independently visible when none of its
+ * ancestors is also collapsed — mirrors the check in `useClusterCollapse`
+ * that decides which clusters actually get hidden vs. drawn as a box.
+ */
+function isTopLevelCollapsed(
+  clusterId: string,
+  collapsedClusters: ReadonlySet<string>,
+  membership: Map<string, Set<string>>,
+): boolean {
+  for (const [parentId, members] of membership) {
+    if (parentId === clusterId) continue;
+    if (collapsedClusters.has(parentId) && members.has(clusterId)) return false;
+  }
+  return true;
+}
+
+/**
  * Compute position overrides that re-layout visible elements into a
  * viewport-fitting rectangular grid.
  *
@@ -111,10 +128,17 @@ export function computeCompactLayout(
   });
 
   // ── Collect collapsed clusters ────────────────────────
+  // Only TOP-LEVEL collapsed clusters get their own grid slot — a nested
+  // collapsed subgraph isn't independently visible (it's hidden inside its
+  // already-collapsed parent's 120x40 box, see useClusterCollapse). Giving
+  // it a grid slot too would fight the parent for the same descendant
+  // nodes' position overrides and drag the visible box off to wherever the
+  // nested one landed instead.
   svgEl.querySelectorAll<SVGGElement>('g.cluster').forEach((g) => {
     const rawId = g.getAttribute('id') ?? '';
     const clusterId = extractClusterUserId(rawId);
     if (!clusterId || !collapsedClusters.has(clusterId)) return;
+    if (!isTopLevelCollapsed(clusterId, collapsedClusters, membership)) return;
 
     const bbox = clusterElementBBox(g);
     if (!bbox) return;

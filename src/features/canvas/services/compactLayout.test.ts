@@ -112,6 +112,45 @@ describe('computeCompactLayout', () => {
     expect(result['A']).toBeDefined();
   });
 
+  it('does not give a nested collapsed subgraph its own grid slot', () => {
+    // Outer collapsed cluster contains node X directly plus nested cluster
+    // Inner (also collapsed, but not independently visible — it's hidden
+    // inside Outer's box). Inner contains node A.
+    const svg = buildSvg({
+      nodes: [
+        { id: 'X', x: 50, y: 0, w: 80, h: 40, hidden: true },
+        { id: 'A', x: 50, y: 300, w: 80, h: 40, hidden: true },
+        { id: 'API', x: 1000, y: 0, w: 80, h: 40 },
+      ],
+      clusters: [
+        { id: 'Outer', x: 50, y: 150, w: 120, h: 400 },
+        { id: 'Inner', x: 50, y: 300, w: 120, h: 40 },
+      ],
+    });
+
+    const membership = new Map<string, Set<string>>([
+      ['Outer', new Set(['Inner', 'X'])],
+      ['Inner', new Set(['A'])],
+    ]);
+    const hiddenNodeIds = new Set(['A', 'X']);
+    const collapsedClusters = new Set(['Outer', 'Inner']);
+
+    const result = computeCompactLayout(
+      svg,
+      hiddenNodeIds,
+      collapsedClusters,
+      membership,
+      16 / 9,
+    );
+
+    // Both descendants moved by the SAME delta (single grid slot for Outer),
+    // so their original relative offset (A is 300px below X) is preserved.
+    expect(result['X']).toBeDefined();
+    expect(result['A']).toBeDefined();
+    expect(result['A'].x - result['X'].x).toBeCloseTo(0, 5);
+    expect(result['A'].y - result['X'].y).toBeCloseTo(300, 5);
+  });
+
   it('does not include hidden nodes in visible element calculation', () => {
     const svg = buildSvg({
       nodes: [
