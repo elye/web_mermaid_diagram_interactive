@@ -36,6 +36,11 @@ const CELL_GAP_Y = 60;
 /** Padding around the entire grid (px). */
 const GRID_PADDING = 40;
 
+/** Extra clearance around a packed subgraph block so the cluster's rendered
+ *  border (which pads out beyond the raw member bboxes) never touches a
+ *  neighboring item. */
+const SUBGRAPH_BLOCK_MARGIN = 64;
+
 interface VisibleElement {
   id: string;
   /** Current center x in SVG root coordinates. */
@@ -46,7 +51,12 @@ interface VisibleElement {
   width: number;
   /** Effective height of this element. */
   height: number;
-  kind: 'node' | 'collapsed-cluster';
+  kind: 'node' | 'collapsed-cluster' | 'subgraph-block';
+  /** Only set for `subgraph-block`: each DIRECT child component plus its
+   *  offset from the block's own center. A child may itself be a
+   *  `subgraph-block` (a nested subgraph, already packed into its own
+   *  block) — that's what keeps nesting isolated at every depth. */
+  members?: { component: VisibleElement; offsetX: number; offsetY: number }[];
 }
 
 /** Parse a standalone SVG string into a detached element; all geometry
@@ -73,6 +83,47 @@ function isTopLevelCollapsed(
     if (collapsedClusters.has(parentId) && members.has(clusterId)) return false;
   }
   return true;
+}
+
+/**
+ * Pack a subgraph's DIRECT child components — plain nodes, nested
+ * subgraph-blocks, and top-level collapsed clusters — into a compact
+ * square-ish mini-grid, returned as a single `subgraph-block` element so
+ * the outer layout treats the whole group as one unit. Because a nested
+ * subgraph's own members are already resolved into its own block before
+ * this runs (see `resolveComponent`), this only ever arranges DIRECT
+ * children — which is what keeps a subgraph's auto-fitted border, at any
+ * nesting depth, from ever wrapping around an unrelated component.
+ */
+function buildSubgraphBlock(groupId: string, children: VisibleElement[]): VisibleElement {
+  const sorted = [...children].sort((a, b) => {
+    const rowA = Math.round(a.cy / 80);
+    const rowB = Math.round(b.cy / 80);
+    if (rowA !== rowB) return rowA - rowB;
+    return a.cx - b.cx;
+  });
+
+  const n = sorted.length;
+  const cols = Math.ceil(Math.sqrt(n));
+  const rows = Math.ceil(n / cols);
+  const cellW = Math.max(...sorted.map((c) => c.width)) + CELL_GAP_X;
+  const cellH = Math.max(...sorted.map((c) => c.height)) + CELL_GAP_Y;
+
+  const members = sorted.map((component, i) => ({
+    component,
+    offsetX: ((i % cols) - (cols - 1) / 2) * cellW,
+    offsetY: (Math.floor(i / cols) - (rows - 1) / 2) * cellH,
+  }));
+
+  return {
+    id: groupId,
+    cx: sorted.reduce((s, c) => s + c.cx, 0) / n,
+    cy: sorted.reduce((s, c) => s + c.cy, 0) / n,
+    width: cols * cellW - CELL_GAP_X + SUBGRAPH_BLOCK_MARGIN,
+    height: rows * cellH - CELL_GAP_Y + SUBGRAPH_BLOCK_MARGIN,
+    kind: 'subgraph-block',
+    members,
+  };
 }
 
 /**
@@ -106,52 +157,85 @@ export function computeCompactLayout(
   const overrides: Record<string, PositionOverride> = {};
   const svgEl = parseNaturalSvg(naturalSvg);
   if (!svgEl) return overrides;
-  const elements: VisibleElement[] = [];
 
-  // ── Collect visible nodes ──────────────────────────────
+  // Every subgraph/node id → its direct parent subgraph id, used to find
+  // which ids are ROOTS (not nested inside anything) to resolve from below.
+  const parentOf = new Map<string, string>();
+  for (const [parentId, members] of membership) {
+    for (const memberId of members) parentOf.set(memberId, parentId);
+  }
+
+  // Plain node geometry, read once.
+  const nodePositions = new Map<string, { cx: number; cy: number; width: number; height: number }>();
   svgEl.querySelectorAll<SVGGElement>('g[data-node-id]').forEach((g) => {
     const id = g.getAttribute('data-node-id')!;
     if (hiddenNodeIds.has(id)) return;
     if (g.style.display === 'none') return;
-
     const bbox = groupBBox(g);
     if (!bbox) return;
-
-    elements.push({
-      id,
+    nodePositions.set(id, {
       cx: bbox.x + bbox.width / 2,
       cy: bbox.y + bbox.height / 2,
       width: bbox.width,
       height: bbox.height,
-      kind: 'node',
     });
   });
 
-  // ── Collect collapsed clusters ────────────────────────
-  // Only TOP-LEVEL collapsed clusters get their own grid slot — a nested
-  // collapsed subgraph isn't independently visible (it's hidden inside its
-  // already-collapsed parent's 120x40 box, see useClusterCollapse). Giving
-  // it a grid slot too would fight the parent for the same descendant
-  // nodes' position overrides and drag the visible box off to wherever the
-  // nested one landed instead.
+  // Cluster <g> elements by user id, read once.
+  const clusterEls = new Map<string, SVGGElement>();
   svgEl.querySelectorAll<SVGGElement>('g.cluster').forEach((g) => {
-    const rawId = g.getAttribute('id') ?? '';
-    const clusterId = extractClusterUserId(rawId);
-    if (!clusterId || !collapsedClusters.has(clusterId)) return;
-    if (!isTopLevelCollapsed(clusterId, collapsedClusters, membership)) return;
-
-    const bbox = clusterElementBBox(g);
-    if (!bbox) return;
-
-    elements.push({
-      id: clusterId,
-      cx: bbox.x + bbox.width / 2,
-      cy: bbox.y + bbox.height / 2,
-      width: COLLAPSED_W,
-      height: COLLAPSED_H,
-      kind: 'collapsed-cluster',
-    });
+    const clusterId = extractClusterUserId(g.getAttribute('id') ?? '');
+    if (clusterId) clusterEls.set(clusterId, g);
   });
+
+  // Recursively resolve `id` into a single placeable component: a plain
+  // node, a top-level collapsed cluster (one box), or a subgraph-block
+  // packing its own DIRECT children (which may themselves be nested
+  // subgraph-blocks). Every subgraph packs only its own direct children —
+  // never flattening deeper descendants into its own mini-grid — so a
+  // component can never end up placed inside a subgraph it doesn't
+  // belong to, no matter how deeply nested the diagram is.
+  const resolving = new Set<string>();
+  function resolveComponent(id: string): VisibleElement | null {
+    if (resolving.has(id)) return null; // cycle guard
+    if (membership.has(id) && !collapsedClusters.has(id)) {
+      resolving.add(id);
+      const children: VisibleElement[] = [];
+      for (const childId of membership.get(id)!) {
+        const child = resolveComponent(childId);
+        if (child) children.push(child);
+      }
+      resolving.delete(id);
+      if (children.length === 0) return null;
+      if (children.length === 1) return children[0];
+      return buildSubgraphBlock(id, children);
+    }
+    if (collapsedClusters.has(id)) {
+      if (!isTopLevelCollapsed(id, collapsedClusters, membership)) return null;
+      const g = clusterEls.get(id);
+      if (!g) return null;
+      const bbox = clusterElementBBox(g);
+      if (!bbox) return null;
+      return {
+        id,
+        cx: bbox.x + bbox.width / 2,
+        cy: bbox.y + bbox.height / 2,
+        width: COLLAPSED_W,
+        height: COLLAPSED_H,
+        kind: 'collapsed-cluster',
+      };
+    }
+    const pos = nodePositions.get(id);
+    return pos ? { id, ...pos, kind: 'node' } : null;
+  }
+
+  const candidateIds = new Set<string>([...nodePositions.keys(), ...membership.keys()]);
+  const elements: VisibleElement[] = [];
+  for (const id of candidateIds) {
+    if (parentOf.has(id)) continue; // resolved via its ancestor instead
+    const el = resolveComponent(id);
+    if (el) elements.push(el);
+  }
 
   // Need at least 2 elements to re-layout.
   if (elements.length < 2) return overrides;
@@ -168,81 +252,108 @@ export function computeCompactLayout(
     return a.cx - b.cx;
   });
 
-  // ── Compute grid dimensions ────────────────────────────────────
   const n = elements.length;
-  const maxW = Math.max(...elements.map((e) => e.width));
-  const maxH = Math.max(...elements.map((e) => e.height));
-  const cellW = maxW + CELL_GAP_X;
-  const cellH = maxH + CELL_GAP_Y;
 
-  // Find the number of columns that makes the grid aspect ratio closest
-  // to the viewport aspect ratio.
-  // Grid width  = cols * cellW
-  // Grid height = rows * cellH, where rows = ceil(n / cols)
-  // We want (cols * cellW) / (rows * cellH) ≈ viewportAspect
-  let bestCols = 1;
-  let bestAspectDiff = Infinity;
-  for (let cols = 1; cols <= n; cols++) {
+  // ── Pack items into a grid whose COLUMN WIDTHS / ROW HEIGHTS adapt to
+  // the largest item in each column/row (like an HTML table), searching
+  // for the column count whose resulting grid aspect ratio best matches
+  // the viewport ──────────────────────────────────────────────────────
+  // A fixed-size shelf (single target row width) breaks down as soon as
+  // one item (e.g. a subgraph block) is wide enough to fill a whole row
+  // by itself — every other item then gets pushed onto its own row too,
+  // degenerating into a single vertical column regardless of aspect
+  // ratio. A real per-column/per-row table has no such failure mode: it
+  // always considers every column count from 1..n, so it can still use
+  // width AND height to match the viewport instead of just stacking.
+  // Column widths and row heights are also what keep this overlap-free:
+  // two items can never share less space than either one needs.
+  function layoutForCols(cols: number) {
     const rows = Math.ceil(n / cols);
-    const gridW = cols * cellW;
-    const gridH = rows * cellH;
-    const aspect = gridW / gridH;
-    const diff = Math.abs(aspect - viewportAspect);
-    if (diff < bestAspectDiff) {
-      bestAspectDiff = diff;
+    const colWidths = new Array(cols).fill(0);
+    const rowHeights = new Array(rows).fill(0);
+    for (let i = 0; i < n; i++) {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      colWidths[col] = Math.max(colWidths[col], elements[i].width);
+      rowHeights[row] = Math.max(rowHeights[row], elements[i].height);
+    }
+    const gridW = colWidths.reduce((s, w) => s + w, 0) + (cols - 1) * CELL_GAP_X;
+    const gridH = rowHeights.reduce((s, h) => s + h, 0) + (rows - 1) * CELL_GAP_Y;
+    return { rows, colWidths, rowHeights, gridW, gridH };
+  }
+
+  let bestCols = 1;
+  let bestDiff = Infinity;
+  let best = layoutForCols(1);
+  for (let cols = 1; cols <= n; cols++) {
+    const layout = layoutForCols(cols);
+    const diff = Math.abs(layout.gridW / layout.gridH - viewportAspect);
+    if (diff < bestDiff) {
+      bestDiff = diff;
       bestCols = cols;
+      best = layout;
     }
   }
 
-  const cols = bestCols;
-  const rows = Math.ceil(n / cols);
+  const { rows, colWidths, rowHeights, gridW, gridH } = best;
+  const colX: number[] = [];
+  for (let c = 0, acc = 0; c < bestCols; c++) { colX.push(acc); acc += colWidths[c] + CELL_GAP_X; }
+  const rowYOffsets: number[] = [];
+  for (let r = 0, acc = 0; r < rows; r++) { rowYOffsets.push(acc); acc += rowHeights[r] + CELL_GAP_Y; }
 
-  // ── Compute grid positions (centers of each cell) ──────────────────────────
-  // Grid origin: center the grid at the centroid of the original layout.
+  // Re-center the grid at the centroid of the original layout.
   const centroidX = elements.reduce((s, e) => s + e.cx, 0) / n;
   const centroidY = elements.reduce((s, e) => s + e.cy, 0) / n;
+  const shiftX = centroidX - gridW / 2;
+  const shiftY = centroidY - gridH / 2;
 
-  const gridW = (cols - 1) * cellW;
-  const gridH = (rows - 1) * cellH;
-  const gridOriginX = centroidX - gridW / 2;
-  const gridOriginY = centroidY - gridH / 2;
-
-  // ── Assign each element to a grid cell and compute overrides ───────────────
-  for (let i = 0; i < n; i++) {
-    const el = elements[i];
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-
-    const targetCx = gridOriginX + col * cellW;
-    const targetCy = gridOriginY + row * cellH;
-
+  // Recursively apply a target center to an element: a plain node or
+  // collapsed cluster writes overrides directly; a subgraph-block instead
+  // recurses into each of its own direct children at their own offset —
+  // so nested subgraphs get their own correctly-isolated target too.
+  function applyElementOverride(el: VisibleElement, targetCx: number, targetCy: number): void {
     const dx = targetCx - el.cx;
     const dy = targetCy - el.cy;
-
-    // Skip if already close enough (< 5px).
-    if (Math.abs(dx) < 5 && Math.abs(dy) < 5) continue;
-
     if (el.kind === 'node') {
-      const nodeG = svgEl.querySelector<SVGGElement>(
-        `g[data-node-id="${el.id}"]`,
-      );
-      if (nodeG) {
-        const pos = parseTranslate(nodeG.getAttribute('transform'));
-        overrides[el.id] = { x: pos.x + dx, y: pos.y + dy };
+      applyNodeOverride(svgEl, overrides, el.id, dx, dy);
+    } else if (el.kind === 'collapsed-cluster') {
+      // For collapsed clusters: move all hidden member nodes by the same delta.
+      for (const nodeId of collectAllNodeIds(el.id, membership)) {
+        applyNodeOverride(svgEl, overrides, nodeId, dx, dy);
       }
     } else {
-      // For collapsed clusters: move all hidden member nodes by the same delta.
-      const memberIds = collectAllNodeIds(el.id, membership);
-      for (const nodeId of memberIds) {
-        const nodeG = svgEl.querySelector<SVGGElement>(
-          `g[data-node-id="${nodeId}"]`,
-        );
-        if (!nodeG) continue;
-        const pos = parseTranslate(nodeG.getAttribute('transform'));
-        overrides[nodeId] = { x: pos.x + dx, y: pos.y + dy };
+      for (const member of el.members ?? []) {
+        applyElementOverride(member.component, targetCx + member.offsetX, targetCy + member.offsetY);
       }
     }
+  }
+
+  // ── Assign each element to its grid cell and compute overrides ───────────
+  for (let i = 0; i < n; i++) {
+    const el = elements[i];
+    const col = i % bestCols;
+    const row = Math.floor(i / bestCols);
+    // Center the item within its (possibly larger) cell.
+    const targetCx = colX[col] + colWidths[col] / 2 + shiftX;
+    const targetCy = rowYOffsets[row] + rowHeights[row] / 2 + shiftY;
+    applyElementOverride(el, targetCx, targetCy);
   }
 
   return overrides;
+}
+
+/** Write a node's position override if it would move by ≥ 5px; reads its
+ *  current (pristine) transform from `svgEl` to compute the absolute target. */
+function applyNodeOverride(
+  svgEl: SVGSVGElement,
+  overrides: Record<string, PositionOverride>,
+  nodeId: string,
+  dx: number,
+  dy: number,
+): void {
+  if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
+  const nodeG = svgEl.querySelector<SVGGElement>(`g[data-node-id="${nodeId}"]`);
+  if (!nodeG) return;
+  const pos = parseTranslate(nodeG.getAttribute('transform'));
+  overrides[nodeId] = { x: pos.x + dx, y: pos.y + dy };
 }

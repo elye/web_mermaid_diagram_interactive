@@ -112,6 +112,120 @@ describe('computeCompactLayout', () => {
     expect(result['A']).toBeDefined();
   });
 
+  it('groups a top-level collapsed cluster with its non-collapsed parent subgraph', () => {
+    // Outer (non-collapsed) directly contains node X plus a nested,
+    // collapsed cluster Inner (containing hidden node A). Inner's box is
+    // independently visible (Outer isn't collapsed), but it still belongs
+    // INSIDE Outer's border — so it must be grouped with X, not placed as
+    // its own free-floating grid item where an unrelated node could land
+    // between them (inside Outer's auto-fitted border).
+    const svg = buildSvg({
+      nodes: [
+        { id: 'A', x: 50, y: 300, w: 80, h: 40, hidden: true },
+        { id: 'X', x: 50, y: 0, w: 80, h: 40 },
+        { id: 'Y', x: 2000, y: 150, w: 80, h: 40 },
+      ],
+      clusters: [
+        { id: 'Inner', x: 50, y: 300, w: 120, h: 40 },
+      ],
+    });
+
+    const membership = new Map<string, Set<string>>([
+      ['Outer', new Set(['Inner', 'X'])],
+      ['Inner', new Set(['A'])],
+    ]);
+    const hiddenNodeIds = new Set(['A']);
+    const collapsedClusters = new Set(['Inner']);
+
+    const result = computeCompactLayout(
+      svg,
+      hiddenNodeIds,
+      collapsedClusters,
+      membership,
+      16 / 9,
+    );
+
+    const resolved = (id: string, orig: { x: number; y: number }) => result[id] ?? orig;
+    const a = resolved('A', { x: 50, y: 300 });
+    const x = resolved('X', { x: 50, y: 0 });
+    const y = resolved('Y', { x: 2000, y: 150 });
+
+    // Outer's bounding box = union of X (80x40) and the collapsed Inner
+    // box (120x40, centered on A's shifted position since A carries it).
+    const outerMinX = Math.min(x.x - 40, a.x - 60);
+    const outerMaxX = Math.max(x.x + 40, a.x + 60);
+    const outerMinY = Math.min(x.y - 20, a.y - 20);
+    const outerMaxY = Math.max(x.y + 20, a.y + 20);
+    const yMinX = y.x - 40;
+    const yMaxX = y.x + 40;
+    const yMinY = y.y - 20;
+    const yMaxY = y.y + 20;
+
+    const separated =
+      outerMaxX < yMinX || outerMinX > yMaxX || outerMaxY < yMinY || outerMinY > yMaxY;
+    expect(separated).toBe(true);
+  });
+
+  it('keeps a nested non-collapsed subgraph isolated from unrelated siblings of its parent', () => {
+    // Outer (non-collapsed) contains: nested non-collapsed Inner (members
+    // P, Q) plus its own direct sibling node W. Flattening P/Q/W into one
+    // mini-grid (ignoring the Inner/Outer distinction) could interleave W
+    // between P and Q, landing it inside Inner's auto-fitted border even
+    // though W isn't one of Inner's members. An unrelated top-level node Z
+    // must also stay outside Outer's overall border.
+    const svg = buildSvg({
+      nodes: [
+        { id: 'P', x: 0, y: 0, w: 80, h: 40 },
+        { id: 'Q', x: 0, y: 200, w: 80, h: 40 },
+        { id: 'W', x: 400, y: 100, w: 80, h: 40 },
+        { id: 'Z', x: 3000, y: 100, w: 80, h: 40 },
+      ],
+    });
+
+    const membership = new Map<string, Set<string>>([
+      ['Outer', new Set(['Inner', 'W'])],
+      ['Inner', new Set(['P', 'Q'])],
+    ]);
+
+    const result = computeCompactLayout(
+      svg,
+      new Set<string>(),
+      new Set<string>(),
+      membership,
+      16 / 9,
+    );
+
+    const resolved = (id: string, orig: { x: number; y: number }) => result[id] ?? orig;
+    const p = resolved('P', { x: 0, y: 0 });
+    const q = resolved('Q', { x: 0, y: 200 });
+    const w = resolved('W', { x: 400, y: 100 });
+    const z = resolved('Z', { x: 3000, y: 100 });
+
+    const box = (c: { x: number; y: number }) => ({
+      minX: c.x - 40, maxX: c.x + 40, minY: c.y - 20, maxY: c.y + 20,
+    });
+    const separated = (
+      a: { minX: number; maxX: number; minY: number; maxY: number },
+      b: { minX: number; maxX: number; minY: number; maxY: number },
+    ) => a.maxX < b.minX || a.minX > b.maxX || a.maxY < b.minY || a.minY > b.maxY;
+
+    // Inner's border (P ∪ Q) must not overlap its own sibling W.
+    const innerMinX = Math.min(p.x, q.x) - 40;
+    const innerMaxX = Math.max(p.x, q.x) + 40;
+    const innerMinY = Math.min(p.y, q.y) - 20;
+    const innerMaxY = Math.max(p.y, q.y) + 20;
+    const inner = { minX: innerMinX, maxX: innerMaxX, minY: innerMinY, maxY: innerMaxY };
+    expect(separated(inner, box(w))).toBe(true);
+
+    // Outer's border (P ∪ Q ∪ W) must not overlap the unrelated node Z.
+    const outerMinX = Math.min(innerMinX, box(w).minX);
+    const outerMaxX = Math.max(innerMaxX, box(w).maxX);
+    const outerMinY = Math.min(innerMinY, box(w).minY);
+    const outerMaxY = Math.max(innerMaxY, box(w).maxY);
+    const outer = { minX: outerMinX, maxX: outerMaxX, minY: outerMinY, maxY: outerMaxY };
+    expect(separated(outer, box(z))).toBe(true);
+  });
+
   it('does not give a nested collapsed subgraph its own grid slot', () => {
     // Outer collapsed cluster contains node X directly plus nested cluster
     // Inner (also collapsed, but not independently visible — it's hidden
@@ -149,6 +263,131 @@ describe('computeCompactLayout', () => {
     expect(result['A']).toBeDefined();
     expect(result['A'].x - result['X'].x).toBeCloseTo(0, 5);
     expect(result['A'].y - result['X'].y).toBeCloseTo(300, 5);
+  });
+
+  it('does not let an unrelated node overlap a non-collapsed subgraph after routing', () => {
+    // Sub's members (A, B) are stacked vertically; unrelated node Y sits
+    // between their original y-range but far away in x. If members were
+    // gridded independently (ignoring subgraph membership), Y could get
+    // sorted/placed between A and B, landing inside Sub's auto-fitted
+    // bounding box even though it isn't one of its members.
+    const svg = buildSvg({
+      nodes: [
+        { id: 'A', x: 0, y: 0, w: 100, h: 50 },
+        { id: 'B', x: 0, y: 300, w: 100, h: 50 },
+        { id: 'Y', x: 1500, y: 150, w: 100, h: 50 },
+      ],
+    });
+
+    const membership = new Map<string, Set<string>>([
+      ['Sub', new Set(['A', 'B'])],
+    ]);
+
+    const result = computeCompactLayout(
+      svg,
+      new Set<string>(),
+      new Set<string>(),
+      membership,
+      16 / 9,
+    );
+
+    const resolved = (id: string, orig: { x: number; y: number }) =>
+      result[id] ?? orig;
+    const a = resolved('A', { x: 0, y: 0 });
+    const b = resolved('B', { x: 0, y: 300 });
+    const y = resolved('Y', { x: 1500, y: 150 });
+
+    // Sub's bounding box (half-extents of a 100x50 node, no extra padding).
+    const subMinX = Math.min(a.x, b.x) - 50;
+    const subMaxX = Math.max(a.x, b.x) + 50;
+    const subMinY = Math.min(a.y, b.y) - 25;
+    const subMaxY = Math.max(a.y, b.y) + 25;
+    const yMinX = y.x - 50;
+    const yMaxX = y.x + 50;
+    const yMinY = y.y - 25;
+    const yMaxY = y.y + 25;
+
+    // AABBs must be separated on at least one axis (no overlap).
+    const separated =
+      subMaxX < yMinX || subMinX > yMaxX || subMaxY < yMinY || subMinY > yMaxY;
+    expect(separated).toBe(true);
+  });
+
+  it('does not overlap sibling members inside the same subgraph', () => {
+    // A 2x2-ish subgraph: with a naive single-shelf-width heuristic, the
+    // widest item claiming the whole row can cascade every other item
+    // (including these siblings) onto their own row, and — with buggy
+    // offset math — even on top of each other.
+    const svg = buildSvg({
+      nodes: [
+        { id: 'A', x: 0, y: 0, w: 100, h: 50 },
+        { id: 'B', x: 200, y: 0, w: 100, h: 50 },
+        { id: 'C', x: 0, y: 200, w: 100, h: 50 },
+        { id: 'D', x: 200, y: 200, w: 100, h: 50 },
+      ],
+    });
+    const membership = new Map<string, Set<string>>([
+      ['Sub', new Set(['A', 'B', 'C', 'D'])],
+    ]);
+
+    const result = computeCompactLayout(
+      svg,
+      new Set<string>(),
+      new Set<string>(),
+      membership,
+      16 / 9,
+    );
+
+    const resolved = (id: string, orig: { x: number; y: number }) => result[id] ?? orig;
+    const centers = [
+      resolved('A', { x: 0, y: 0 }),
+      resolved('B', { x: 200, y: 0 }),
+      resolved('C', { x: 0, y: 200 }),
+      resolved('D', { x: 200, y: 200 }),
+    ];
+
+    // Every pair of 100x50 members must be axis-separated (no overlap).
+    for (let i = 0; i < centers.length; i++) {
+      for (let j = i + 1; j < centers.length; j++) {
+        const p = centers[i];
+        const q = centers[j];
+        const separated =
+          Math.abs(p.x - q.x) >= 100 || Math.abs(p.y - q.y) >= 50;
+        expect(separated).toBe(true);
+      }
+    }
+  });
+
+  it('spreads many items across columns instead of collapsing to one column', () => {
+    // 8 standalone nodes plus a 2-member subgraph, targeting a wide (16:9)
+    // viewport. A single wide item should not force every other item onto
+    // its own row (the failure mode of a fixed-target-row-width shelf).
+    const nodes = Array.from({ length: 8 }, (_, i) => ({
+      id: `N${i}`,
+      x: 0,
+      y: i * 150,
+      w: 100,
+      h: 50,
+    }));
+    nodes.push({ id: 'S1', x: 1000, y: 0, w: 100, h: 50 });
+    nodes.push({ id: 'S2', x: 1000, y: 150, w: 100, h: 50 });
+    const svg = buildSvg({ nodes });
+
+    const membership = new Map<string, Set<string>>([
+      ['Sub', new Set(['S1', 'S2'])],
+    ]);
+
+    const result = computeCompactLayout(
+      svg,
+      new Set<string>(),
+      new Set<string>(),
+      membership,
+      16 / 9,
+    );
+
+    const xs = new Set(Object.values(result).map((p) => Math.round(p.x)));
+    // More than one distinct x column should be in use.
+    expect(xs.size).toBeGreaterThan(1);
   });
 
   it('does not include hidden nodes in visible element calculation', () => {
