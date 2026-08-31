@@ -6,6 +6,7 @@
  *   1.1 — adds edge waypoints, edge anchor overrides, and edge styles so
  *         reshaped/re-anchored/restyled lines survive save/reload.
  *   1.2 — adds clusterStyles so subgraph appearance survives save/reload.
+ *         Also adds collapsedClusters so expand/collapse state persists.
  *
  * Loader accepts all; writer emits 1.2.
  */
@@ -46,6 +47,12 @@ export interface MermaidFlowFileV1_2 {
   edgeAnchorOverrides: Record<string, { source?: EdgeAnchorOverride; target?: EdgeAnchorOverride }>;
   /** Per-subgraph style overrides (fill / stroke / strokeWidth). */
   clusterStyles: Record<string, StyleOverride>;
+  /**
+   * Ids of subgraph clusters currently in collapsed form.
+   * Serialised as a plain array; restored to a Set in the store.
+   * Optional — older v1.2 files without this field default to all-expanded.
+   */
+  collapsedClusters?: string[];
   annotations: Annotation[];
   theme: string;
   viewportState: ViewportState;
